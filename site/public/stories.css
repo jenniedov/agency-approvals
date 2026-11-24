@@ -220,3 +220,14 @@ body.st-open .fy-top, body.st-open .fy-tabs { visibility: hidden; }
   .st-burst { animation: st-fade .9s linear forwards; }
   @keyframes st-fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 }
+
+/* public share page (readonly): no reply bar; nothing to close */
+.st-ro .st-bar, .st-ro .st-scrub, .st-ro .st-badge { display: none; }
+@media (max-width: 899px) {
+  .st-ro .st-frame {
+    display: flex; align-items: center; top: 0; bottom: 0;
+    width: min(100%, calc((100vh - var(--safe-t, 0px) - var(--safe-b, 0px)) * 9 / 16));
+    width: min(100%, calc((100dvh - var(--safe-t, 0px) - var(--safe-b, 0px)) * 9 / 16));
+  }
+  .st-ro .st-media { flex: none; }
+}

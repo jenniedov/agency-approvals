@@ -125,6 +125,11 @@ async function route(req, env) {
     if (!c) return new Response('הקישור לא נמצא', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
     return servePage(env, req, '/client.html');
   }
+  if ((m = p.match(/^\/s\/([\w-]{16,})\/?$/))) {
+    const sh = await liveShare(env, m[1]);
+    if (!sh) return new Response('הקישור לא נמצא', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'x-robots-tag': 'noindex' } });
+    return servePage(env, req, '/share.html');
+  }
   if (p === '/foryou' || p === '/foryou/') return servePage(env, req, '/foryou.html');
   if ((m = p.match(/^\/cover\/([\w-]{12,})\.jpg$/))) {
     const o = await one(env.DB, 'SELECT image FROM cover_options WHERE token = ?', m[1]);
@@ -139,6 +144,8 @@ async function route(req, env) {
     let ok = !!(await readSession(env, req).catch(() => null));
     const t = url.searchParams.get('t');
     if (!ok && t) ok = !!(await one(env.DB, 'SELECT 1 AS y FROM versions v JOIN posts po ON po.id = v.post_id JOIN clients c ON c.id = po.client_id WHERE v.bunny_guid = ? AND c.share_token = ? AND c.archived = 0', m[1], t));
+    // a story-share link: only the current version of a post that is in that share
+    if (!ok && t) ok = await shareAllowsGuid(env, t, m[1]);
     if (!ok) return new Response('login', { status: 403 });
     return serveMedia(env, req, m[1]);
   }
@@ -155,6 +162,14 @@ async function route(req, env) {
     const auth = req.headers.get('authorization') || '';
     if (!env.AGENT_TOKEN || !safeEqual(auth, `Bearer ${env.AGENT_TOKEN}`)) return err('auth', 401);
     return agentRoutes(req, env, settings, p.slice('/api/agent'.length), body);
+  }
+
+  // ---------- story share (public, view only: GET only, nothing else is reachable with this token)
+  if ((m = p.match(/^\/api\/s\/([\w-]{16,})$/))) {
+    if (method !== 'GET') return err('read_only', 405);
+    const sh = await liveShare(env, m[1]);
+    if (!sh) return err('not_found', 404);
+    return json(await shareView(env, settings, sh), 200, { 'cache-control': 'no-store', 'x-robots-tag': 'noindex' });
   }
 
   // ---------- end-client (token link, no login)
@@ -241,6 +256,14 @@ async function route(req, env) {
   // ---------- team routes need a user
   if (!user) return err('login', 401);
   const actor = user.name;
+
+  if (p === '/api/story-shares' && method === 'POST') {
+    const r = await createShare(req, env, (await body()).post_ids);
+    return r.error ? err(r.error, r.status || 400) : json({ url: r.url });
+  }
+  if ((m = p.match(/^\/api\/story-shares\/([\w-]{16,})\/revoke$/)) && method === 'POST') {
+    return json({ ok: await revokeShare(env, m[1]) });
+  }
 
   if (p === '/api/overview' && method === 'GET') {
     const [clients, counts, notifications, unread, machine, week] = await Promise.all([
@@ -442,6 +465,53 @@ function downloadUrl(settings, origin, guid, height) {
   return pb && pb.mp4[0] ? new URL(pb.mp4[0], origin).toString() : null;
 }
 
+// ---------- story shares: a public, view-only link to an ordered list of posts (their CURRENT versions)
+async function liveShare(env, token) {
+  const r = await one(env.DB, 'SELECT * FROM story_shares WHERE token = ? AND revoked = 0', token).catch(() => null);
+  if (!r) return null;
+  const ids = safeParse(r.post_ids);
+  return Array.isArray(ids) ? { ...r, ids: ids.map(Number).filter(Number.isInteger) } : null;
+}
+async function shareAllowsGuid(env, token, guid) {
+  if (!/^[\w-]{16,}$/.test(token)) return false;
+  const sh = await liveShare(env, token);
+  if (!sh || !sh.ids.length) return false;
+  return !!(await one(env.DB, `SELECT 1 AS y FROM versions v JOIN posts po ON po.current_version_id = v.id WHERE v.bunny_guid = ? AND po.id IN (${sh.ids.map(() => '?').join(',')})`, guid, ...sh.ids));
+}
+async function shareView(env, settings, sh) {
+  const q = sh.ids.map(() => '?').join(',');
+  const rows = sh.ids.length ? await all(env.DB, `${POST_SQL} WHERE p.id IN (${q})`, ...sh.ids) : [];
+  const posts = (await expandPosts(env, settings, rows));
+  const byId = Object.fromEntries(posts.map((x) => [x.id, x]));
+  const ordered = sh.ids.map((id) => byId[id]).filter(Boolean);
+  const first = ordered[0];
+  const client = first ? await one(env.DB, 'SELECT id, name, avatar, color FROM clients WHERE id = ?', first.client_id) : null;
+  return {
+    client: client || { id: '', name: '' },
+    posts: ordered.map((x) => {
+      const v = withToken(x.version, sh.token);
+      return {
+        id: x.id, title: x.title, cover_url: x.cover_url,
+        version: v && { id: v.id, mp4: v.mp4, hls: v.hls, thumb: v.thumb, duration: v.duration },
+        texts: x.texts.map((t) => ({ id: t.id, text: t.text, style: t.style, x: t.x, y: t.y, width_pct: t.width_pct, font_px_at_1080: t.font_px_at_1080, rotation: t.rotation })),
+      };
+    }),
+  };
+}
+async function createShare(req, env, postIds) {
+  const ids = [...new Set((Array.isArray(postIds) ? postIds : []).map(Number))];
+  if (!ids.length || ids.length > 40 || ids.some((n) => !Number.isInteger(n) || n < 1)) return { error: 'post_ids' };
+  const found = await all(env.DB, `SELECT id FROM posts WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids);
+  if (found.length !== ids.length) return { error: 'post_not_found', status: 404 };
+  const token = randomToken(24).replace(/[^\w-]/g, 'x');
+  await env.DB.prepare('INSERT INTO story_shares (token, post_ids) VALUES (?, ?)').bind(token, JSON.stringify(ids)).run();
+  return { token, url: `${new URL(req.url).origin}/s/${token}` };
+}
+async function revokeShare(env, token) {
+  const r = await env.DB.prepare('UPDATE story_shares SET revoked = 1 WHERE token = ? AND revoked = 0').bind(token).run();
+  return !!(r.meta && r.meta.changes);
+}
+
 // Stream an R2 video with HTTP Range (Safari on iPhone will not play a video without 206 answers).
 async function serveMedia(env, req, guid) {
   if (!env.MEDIA) return new Response('no media bucket', { status: 404 });
@@ -521,6 +591,13 @@ async function agentRoutes(req, env, settings, p, body) {
       b.client_id, String(b.title).slice(0, 200), ['reel', 'story', 'short', 'long', 'post'].includes(b.kind) ? b.kind : 'reel',
       b.orientation === 'horizontal' ? 'horizontal' : 'vertical', b.caption || null, b.platforms ? JSON.stringify(b.platforms) : null, b.scheduled_at || null);
     return json({ post });
+  }
+  if (p === '/story-shares' && method === 'POST') {
+    const r = await createShare(req, env, (await body()).post_ids);
+    return r.error ? err(r.error, r.status || 400) : json({ url: r.url, token: r.token });
+  }
+  if ((m = p.match(/^\/story-shares\/([\w-]{16,})\/revoke$/)) && method === 'POST') {
+    return json({ ok: await revokeShare(env, m[1]) });
   }
   if (p === '/bunny/video' && method === 'POST') {
     if (!settings.bunny_key_enc) return err('bunny_not_set', 409);

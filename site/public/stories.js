@@ -50,7 +50,8 @@
     return el;
   }
 
-  /* opts: {sets: [{client, posts}], client?, post?, api, video?, muted, gesture, onClose(summary), onMute(m)} */
+  /* opts: {sets: [{client, posts}], client?, post?, api, video?, muted, gesture, onClose(summary), onMute(m), readonly?}
+     readonly: the public share page (share.js): no approve/comment bar, no Aa editor, no moving stickers, no scrubber, no close */
   function open(opts) {
     if (V) close();
     const list = [];
@@ -69,7 +70,8 @@
 
     const vid = opts.video || document.createElement('video');
     list.forEach((x) => { if (!Array.isArray(x.post.texts)) x.post.texts = []; });
-    const root = h('div', { class: 'st', dir: 'ltr', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'סטוריז לאישור' });
+    const RO = !!opts.readonly;
+    const root = h('div', { class: 'st' + (RO ? ' st-ro' : ''), dir: 'ltr', role: 'dialog', 'aria-modal': 'true', 'aria-label': RO ? 'סטוריז' : 'סטוריז לאישור' });
     const frame = h('div', { class: 'st-frame' });
     const media = h('div', { class: 'st-media' });
     const poster = h('img', { class: 'st-poster', alt: '' });
@@ -100,7 +102,7 @@
     vid.muted = !!opts.muted || !opts.gesture;
     const sbox = h('div', { 'aria-hidden': 'true', style: 'position:absolute;left:0;bottom:0;width:2px;height:2px;overflow:hidden;opacity:0;pointer-events:none' });
     media.append(sbox, poster, vid, h('div', { class: 'st-shade' }), tap, texts, head, center, verr, trash);
-    frame.append(media, scrub, bar, end, toastEl);
+    if (RO) frame.append(media, end, toastEl); else frame.append(media, scrub, bar, end, toastEl);
     root.append(frame, navPrev, navNext);
     document.body.append(root);
     document.body.classList.add('st-open');
@@ -144,6 +146,7 @@
     navNext.addEventListener('click', () => next());
     V.onKey = (e) => {
       if (!V) return;
+      if (RO) { if (e.key === 'ArrowRight') { e.preventDefault(); next(); } else if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); } else if (e.key === ' ') { e.preventDefault(); togglePause(); } else if (e.key === 'm' || e.key === 'M') setMuted(!V.vid.muted); return; }
       if (V.editing) { if (e.key === 'Escape') { e.preventDefault(); V.finishEditor && V.finishEditor(); } return; }
       if (e.target === input) { if (e.key === 'Escape') { input.value = ''; root.classList.remove('has-text'); input.blur(); exitComment(); } return; }
       if (e.target && e.target.type === 'range') return;
@@ -249,21 +252,22 @@
     V.bars.replaceChildren(...inSet.map((p, n) => h('i', { class: n < k ? 'done' : '' }, h('b', {}))));
     const muted = V.vid.muted;
     const paused = V.userPaused;
-    $('.st-row', V.head).replaceChildren(
+    $('.st-row', V.head).replaceChildren(...[
       avatar(set.client, 32),
       h('span', { class: 'st-who' },
         h('b', { class: 'st-name', dir: 'auto' }, set.client.name || ''),
         h('span', { class: 'st-title', dir: 'auto' }, post.title || '')),
       h('span', { class: 'st-badge' }),
       h('span', { class: 'st-grow' }),
-      h('button', { type: 'button', class: 'st-ib st-aa', 'aria-label': 'הוספת טקסט', onclick: () => openEditor(null) }, 'Aa'),
+      V.opts.readonly ? null : h('button', { type: 'button', class: 'st-ib st-aa', 'aria-label': 'הוספת טקסט', onclick: () => openEditor(null) }, 'Aa'),
       h('button', { type: 'button', class: 'st-ib st-pp', 'aria-label': paused ? 'המשך' : 'עצירה', html: icon(paused ? 'play' : 'pause'), onclick: () => togglePause() }),
       h('button', { type: 'button', class: 'st-ib st-mute', 'aria-label': muted ? 'הפעלת שמע' : 'השתקה', html: icon(muted ? 'mute' : 'vol'), onclick: () => setMuted(!V.vid.muted) }),
-      h('button', { type: 'button', class: 'st-ib st-x', 'aria-label': 'סגירה', html: icon('x'), onclick: () => close() }));
+      V.opts.readonly ? null : h('button', { type: 'button', class: 'st-ib st-x', 'aria-label': 'סגירה', html: icon('x'), onclick: () => close() })].filter(Boolean));
     V.root.querySelector('.st-nav.prev').disabled = V.i === 0;
   }
 
   function paintState() {
+    if (V.opts.readonly) return;
     const { post } = cur();
     const st = post.video_state;
     V.approveBtn.classList.toggle('on', st === 'approved');
@@ -350,12 +354,12 @@
       const swipe = Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3;
       if (V.held) {
         V.held = false; V.root.classList.remove('holding');
-        if (!cancel && dy > 110) { close(); return; }
+        if (!cancel && dy > 110 && !V.opts.readonly) { close(); return; }
         if (!cancel && swipe) { dx < 0 ? next() : prev(); return; }
         resume(); return;
       }
       if (cancel) return;
-      if (dy > 110 && Math.abs(dy) > Math.abs(dx)) { close(); return; }
+      if (dy > 110 && Math.abs(dy) > Math.abs(dx) && !V.opts.readonly) { close(); return; }
       if (swipe) { dx < 0 ? next() : prev(); return; } // swipe left = next, like Instagram
       if (performance.now() - t0 > 500 || Math.abs(dx) > 14 || Math.abs(dy) > 14) return;
       if (document.activeElement === V.input) { V.input.blur(); return; }
@@ -467,7 +471,7 @@
       const el = h('div', { class: 'st-text', dir: 'rtl' });
       paintText(el, t);
       if (hideId != null && t.id === hideId) el.classList.add('hide');
-      bindText(el, t, post);
+      if (V.opts.readonly) el.style.pointerEvents = 'none'; else bindText(el, t, post);
       return el;
     }));
   }
@@ -623,6 +627,15 @@
     pause();
     cancelAnimationFrame(V.raf);
     [...V.bars.children].forEach((b) => { b.className = 'done'; b.firstChild.style.transform = ''; });
+    if (V.opts.readonly) {
+      V.end.replaceChildren(h('div', { class: 'st-end-in' },
+        h('div', { class: 'st-end-ic', html: icon('check') }),
+        h('h2', {}, 'זה היה הסטורי האחרון'),
+        h('div', { class: 'st-end-acts' }, h('button', { type: 'button', class: 'st-pill solid', onclick: () => show(0) }, 'לצפייה שוב'))));
+      V.end.hidden = false;
+      V.root.classList.add('at-end');
+      return;
+    }
     const s = summary();
     const title = s.left ? (s.left === 1 ? 'נשאר סטורי אחד' : 'נשארו ' + s.left + ' סטוריז') : s.notes ? 'עברת על הכל' : 'הכל אושר';
     const parts = [];
