@@ -23,7 +23,7 @@ out.append(f"INSERT OR IGNORE INTO clients (id, name, handle, profile_url, avata
            f"('demo-cafe', 'קפה דמו', 'demo.cafe', NULL, {q(avatar)}, 'בית קפה שכונתי. לקוח לדוגמה', '#c9a97f', {q(secrets.token_urlsafe(16))});")
 posts = [
     ("רילס פתיחת בוקר", "reel", "vertical", "demo-1", 9, 720, 1280, "בוקר טוב מהשכונה ☕️\nהקרואסון של היום יוצא מהתנור ב-8:00", "review"),
-    ("מאחורי הבר", "reel", "vertical", "demo-2", 11, 720, 1280, "ככה נראה אספרסו כפול כשאף אחד לא ממהר", "review"),
+    ("השקת התפריט החדש", "reel", "vertical", "demo-2", 11, 720, 1280, "הגיע הזמן לטעום משהו חדש. תפריט החורף שלנו נוחת ביום ראשון 🍝", "review"),
     ("מבצע סוף שבוע", "story", "vertical", "demo-3", 8, 720, 1280, "שישי-שבת: קפה + מאפה ב-25 ₪", "review"),
     ("סרטון היכרות ארוך", "long", "horizontal", "demo-4", 14, 1280, 720, "הכירו את הצוות שמאחורי הדלפק", "review"),
 ]
