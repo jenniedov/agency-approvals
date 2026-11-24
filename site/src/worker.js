@@ -104,9 +104,9 @@ async function servePage(env, req, file) {
 }
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     try {
-      return await route(req, env);
+      return await route(req, env, ctx);
     } catch (e) {
       console.error(e && e.stack || e, e && e.body);
       return json({ error: 'server', detail: String(e && e.message || e), bunny: e && e.body || undefined }, e && e.status === 401 ? 502 : 500);
@@ -114,7 +114,7 @@ export default {
   },
 };
 
-async function route(req, env) {
+async function route(req, env, ctx) {
   const url = new URL(req.url);
   const p = url.pathname;
   const method = req.method;
@@ -153,7 +153,9 @@ async function route(req, env) {
 
   // Cheap CSRF guard: browser writes must be JSON (a cross-site form cannot send that without a preflight).
   const ctype = req.headers.get('content-type') || '';
-  if (method !== 'GET' && !p.startsWith('/api/agent/') && ctype && !ctype.includes('application/json')) return err('json_only', 415);
+  // job file chunks are raw bytes (a cross-site form cannot send application/octet-stream either)
+  const rawPart = method === 'PUT' && /^\/api\/jobs\/\d+\/files\/\d+\/parts\/\d+$/.test(p) && ctype.includes('application/octet-stream');
+  if (method !== 'GET' && !p.startsWith('/api/agent/') && !rawPart && ctype && !ctype.includes('application/json')) return err('json_only', 415);
   const settings = await getSettings(env).catch((e) => { throw Object.assign(new Error('schema: run the migrations (--remote)'), { cause: e }); });
   const body = async () => (method === 'GET' ? {} : req.json().catch(() => ({})));
 
@@ -256,6 +258,11 @@ async function route(req, env) {
   // ---------- team routes need a user
   if (!user) return err('login', 401);
   const actor = user.name;
+
+  if (p === '/api/jobs' || p.startsWith('/api/jobs/')) {
+    if (user.role !== 'owner') return err('owner_only', 403);
+    return jobRoutes(req, env, user, p.slice('/api/jobs'.length), body);
+  }
 
   if (p === '/api/story-shares' && method === 'POST') {
     const r = await createShare(req, env, (await body()).post_ids);
@@ -513,9 +520,8 @@ async function revokeShare(env, token) {
 }
 
 // Stream an R2 video with HTTP Range (Safari on iPhone will not play a video without 206 answers).
-async function serveMedia(env, req, guid) {
+async function serveMedia(env, req, guid, key = mediaKey(guid)) {
   if (!env.MEDIA) return new Response('no media bucket', { status: 404 });
-  const key = mediaKey(guid);
   const head = await env.MEDIA.head(key);
   if (!head) return new Response('not found', { status: 404 });
   const size = head.size;
@@ -708,6 +714,10 @@ async function agentRoutes(req, env, settings, p, body) {
     await addEvent(env, 'scheduled', { post_id: id, client_id: post.client_id, actor: 'claude', body: at });
     return json({ post: await one(env.DB, `${POST_SQL} WHERE p.id = ?`, id) });
   }
+  if (p === '/jobs' || p.startsWith('/jobs/')) {
+    const r = await agentJobRoutes(req, env, settings, p.slice('/jobs'.length), body);
+    if (r) return r;
+  }
   if (p === '/secrets' && method === 'GET') {
     return json({ elevenlabs_key: await unseal(env, settings.elevenlabs_key_enc).catch(() => null) });
   }
@@ -721,4 +731,188 @@ async function agentRoutes(req, env, settings, p, body) {
     return json({ ok: true });
   }
   return err('unknown', 404);
+}
+
+// ---------- jobs: Jennie's "new job" intake (files from the phone + text / voice note) → Claude's queue on the Mac
+const JOB_STATUSES = ['draft', 'queued', 'new', 'working', 'done'];
+const PART_SIZE = 10 * 1024 * 1024; // every part but the last is exactly this size (R2: 5 MiB min, all equal)
+const MAX_JOB_FILE = 8 * 1024 * 1024 * 1024;
+const safeName = (n) => String(n || 'file').normalize('NFKD').replace(/[^\w.\-]+/g, '_').replace(/^_+|_+$/g, '').slice(-80) || 'file';
+
+async function jobWithFiles(env, id, filesUrl) {
+  const job = await one(env.DB, 'SELECT * FROM jobs WHERE id = ?', +id);
+  if (!job) return null;
+  const files = await all(env.DB, 'SELECT * FROM job_files WHERE job_id = ? ORDER BY id', job.id);
+  return { ...job, files: files.map((f) => ({ id: f.id, role: f.role, name: f.name, content_type: f.content_type, size: f.size, state: f.state, transcript: f.transcript, transcript_state: f.transcript_state, url: filesUrl(job.id, f.id) })) };
+}
+const uiFileUrl = (jid, fid) => `/api/jobs/${jid}/files/${fid}/media`;
+
+// sent + every file in → the job lands in Claude's queue
+async function releaseJob(env, id) {
+  const job = await one(env.DB, 'SELECT * FROM jobs WHERE id = ?', id);
+  if (!job || job.status !== 'queued') return;
+  const busy = await one(env.DB, "SELECT COUNT(*) AS n FROM job_files WHERE job_id = ? AND state = 'uploading'", id);
+  if (busy.n) return;
+  await env.DB.prepare("UPDATE jobs SET status='new', updated_at=datetime('now') WHERE id=? AND status='queued'").bind(id).run();
+}
+
+async function transcribe(env, settings, f) {
+  const key = await unseal(env, settings.elevenlabs_key_enc).catch(() => null);
+  if (!key) return { error: 'no_key' };
+  const obj = await env.MEDIA.get(f.r2_key);
+  if (!obj) return { error: 'no_file' };
+  const fd = new FormData();
+  fd.append('model_id', 'scribe_v3');
+  fd.append('language_code', 'he');
+  fd.append('tag_audio_events', 'false');
+  fd.append('diarize', 'false');
+  fd.append('file', new Blob([await obj.arrayBuffer()], { type: f.content_type || 'audio/mp4' }), safeName(f.name));
+  const r = await fetch('https://api.elevenlabs.io/v1/speech-to-text', { method: 'POST', headers: { 'xi-api-key': key }, body: fd });
+  if (!r.ok) {
+    console.error('scribe', r.status, (await r.text()).slice(0, 300));
+    await env.DB.prepare("UPDATE job_files SET transcript_state='failed', updated_at=datetime('now') WHERE id=?").bind(f.id).run();
+    return { error: 'scribe_' + r.status };
+  }
+  const text = String((await r.json()).text || '').trim();
+  await env.DB.prepare("UPDATE job_files SET transcript=?, transcript_state='done', updated_at=datetime('now') WHERE id=?").bind(text, f.id).run();
+  return { transcript: text };
+}
+
+async function jobRoutes(req, env, user, p, body) {
+  const method = req.method;
+  let m;
+  if (!env.MEDIA) return err('r2_not_bound', 409);
+  if (p === '' && method === 'GET') {
+    const jobs = await all(env.DB, "SELECT * FROM jobs WHERE status != 'draft' ORDER BY id DESC LIMIT 30");
+    const files = jobs.length ? await all(env.DB, `SELECT id, job_id, role, name, content_type, size, state, transcript, transcript_state FROM job_files WHERE job_id IN (${jobs.map(() => '?').join(',')}) ORDER BY id`, ...jobs.map((j) => j.id)) : [];
+    return json({ jobs: jobs.map((j) => ({ ...j, files: files.filter((f) => f.job_id === j.id).map((f) => ({ ...f, url: uiFileUrl(j.id, f.id) })) })) });
+  }
+  if (p === '' && method === 'POST') {
+    const job = await one(env.DB, 'INSERT INTO jobs (created_by) VALUES (?) RETURNING id', user.id);
+    return json({ job: await jobWithFiles(env, job.id, uiFileUrl), part_size: PART_SIZE });
+  }
+  if (!(m = p.match(/^\/(\d+)(\/.*)?$/))) return err('unknown', 404);
+  const id = +m[1], rest = m[2] || '';
+  const job = await one(env.DB, 'SELECT * FROM jobs WHERE id = ?', id);
+  if (!job) return err('not_found', 404);
+
+  if (rest === '' && method === 'GET') return json({ job: await jobWithFiles(env, id, uiFileUrl) });
+  if (rest === '' && method === 'DELETE') {
+    if (job.status !== 'draft') return err('already_sent', 409);
+    const files = await all(env.DB, 'SELECT * FROM job_files WHERE job_id = ?', id);
+    for (const f of files) await dropFile(env, f);
+    await env.DB.batch([env.DB.prepare('DELETE FROM job_files WHERE job_id = ?').bind(id), env.DB.prepare('DELETE FROM jobs WHERE id = ?').bind(id)]);
+    return json({ ok: true });
+  }
+  if (rest === '/files' && method === 'POST') {
+    if (!['draft', 'queued'].includes(job.status)) return err('already_sent', 409);
+    const b = await body();
+    const size = Math.floor(+b.size || 0);
+    if (size <= 0 || size > MAX_JOB_FILE) return err('size');
+    const role = b.role === 'voice' ? 'voice' : 'media';
+    const ctype = String(b.content_type || 'application/octet-stream').slice(0, 100);
+    const f0 = await one(env.DB, 'INSERT INTO job_files (job_id, role, name, content_type, size, r2_key, transcript_state) VALUES (?,?,?,?,?,?,?) RETURNING id',
+      id, role, String(b.name || 'file').slice(0, 200), ctype, size, 'pending', role === 'voice' ? 'pending' : null);
+    const key = `jobs/${id}/${f0.id}-${safeName(b.name)}`;
+    const mpu = await env.MEDIA.createMultipartUpload(key, { httpMetadata: { contentType: ctype }, customMetadata: { job: String(id), name: String(b.name || '').slice(0, 200) } });
+    await env.DB.prepare("UPDATE job_files SET r2_key=?, upload_id=? WHERE id=?").bind(key, mpu.uploadId, f0.id).run();
+    return json({ file_id: f0.id, part_size: PART_SIZE, parts: Math.max(1, Math.ceil(size / PART_SIZE)) });
+  }
+  if (!(m = rest.match(/^\/files\/(\d+)(\/.*)?$/))) {
+    if (rest === '/send' && method === 'POST') {
+      const b = await body();
+      const text = String(b.text || '').trim().slice(0, 20000);
+      const n = await one(env.DB, 'SELECT COUNT(*) AS n FROM job_files WHERE job_id = ?', id);
+      if (!text && !n.n) return err('empty');
+      if (b.force) await env.DB.prepare("UPDATE job_files SET state='failed', updated_at=datetime('now') WHERE job_id=? AND state='uploading'").bind(id).run();
+      const sent = job.status === 'draft' ? "status='queued', sent_at=datetime('now')," : '';
+      await env.DB.prepare(`UPDATE jobs SET ${sent} text=?, updated_at=datetime('now') WHERE id=?`).bind(text || null, id).run();
+      await releaseJob(env, id);
+      return json({ job: await jobWithFiles(env, id, uiFileUrl) });
+    }
+    return err('unknown', 404);
+  }
+  const fid = +m[1], frest = m[2] || '';
+  const f = await one(env.DB, 'SELECT * FROM job_files WHERE id = ? AND job_id = ?', fid, id);
+  if (!f) return err('not_found', 404);
+
+  if ((m = frest.match(/^\/parts\/(\d+)$/)) && method === 'PUT') {
+    if (f.state !== 'uploading') return err('not_uploading', 409);
+    const n = +m[1], len = +(req.headers.get('content-length') || 0);
+    const total = Math.max(1, Math.ceil(f.size / PART_SIZE));
+    const want = n < total ? PART_SIZE : f.size - PART_SIZE * (total - 1);
+    if (n < 1 || n > total || !req.body || len !== want) return err('part_size');
+    const part = await env.MEDIA.resumeMultipartUpload(f.r2_key, f.upload_id).uploadPart(n, req.body);
+    return json({ part_number: part.partNumber, etag: part.etag });
+  }
+  if (frest === '/complete' && method === 'POST') {
+    if (f.state === 'ready') return json({ ok: true });
+    const parts = ((await body()).parts || []).map((x) => ({ partNumber: +x.part_number, etag: String(x.etag) })).sort((a, b) => a.partNumber - b.partNumber);
+    const obj = await env.MEDIA.resumeMultipartUpload(f.r2_key, f.upload_id).complete(parts);
+    if (obj.size !== f.size) return err('size_mismatch', 409);
+    await env.DB.prepare("UPDATE job_files SET state='ready', upload_id=NULL, updated_at=datetime('now') WHERE id=?").bind(fid).run();
+    await releaseJob(env, id);
+    return json({ ok: true });
+  }
+  if (frest === '/transcribe' && method === 'POST') {
+    if (f.role !== 'voice' || f.state !== 'ready') return err('not_voice', 409);
+    if (f.transcript_state === 'done') return json({ transcript: f.transcript });
+    const r = await transcribe(env, await getSettings(env), f);
+    return r.error ? err(r.error, r.error === 'no_key' ? 409 : 502) : json(r);
+  }
+  if (frest === '' && method === 'DELETE') {
+    if (job.status !== 'draft') return err('already_sent', 409);
+    await dropFile(env, f);
+    await env.DB.prepare('DELETE FROM job_files WHERE id = ?').bind(fid).run();
+    return json({ ok: true });
+  }
+  if (frest === '/media' && (method === 'GET' || method === 'HEAD')) return serveMedia(env, req, null, f.r2_key);
+  return err('unknown', 404);
+}
+
+async function dropFile(env, f) {
+  if (f.state === 'uploading' && f.upload_id) await env.MEDIA.resumeMultipartUpload(f.r2_key, f.upload_id).abort().catch(() => {});
+  else await env.MEDIA.delete(f.r2_key).catch(() => {});
+}
+
+// Claude's side: GET /jobs[?status=new,working|all], GET /jobs/:id, GET /jobs/:id/files/:fid, POST /jobs/:id/status, POST /jobs/:id/files/:fid/transcript
+async function agentJobRoutes(req, env, settings, p, body) {
+  const method = req.method;
+  const origin = urlOf(req).origin;
+  const agentUrl = (jid, fid) => `${origin}/api/agent/jobs/${jid}/files/${fid}`;
+  let m;
+  if (p === '' && method === 'GET') {
+    const q = urlOf(req).searchParams.get('status') || 'queued,new,working';
+    const sts = q === 'all' ? JOB_STATUSES.filter((s) => s !== 'draft') : q.split(',').filter((s) => JOB_STATUSES.includes(s));
+    if (!sts.length) return err('status');
+    const rows = await all(env.DB, `SELECT id FROM jobs WHERE status IN (${sts.map(() => '?').join(',')}) ORDER BY id DESC LIMIT 50`, ...sts);
+    return json({ jobs: await Promise.all(rows.map((r) => jobWithFiles(env, r.id, agentUrl))) });
+  }
+  if ((m = p.match(/^\/(\d+)$/)) && method === 'GET') {
+    const j = await jobWithFiles(env, +m[1], agentUrl);
+    return j ? json({ job: j }) : err('not_found', 404);
+  }
+  if ((m = p.match(/^\/(\d+)\/files\/(\d+)$/)) && (method === 'GET' || method === 'HEAD')) {
+    const f = await one(env.DB, "SELECT * FROM job_files WHERE id = ? AND job_id = ? AND state = 'ready'", +m[2], +m[1]);
+    return f ? serveMedia(env, req, null, f.r2_key) : err('not_found', 404);
+  }
+  if ((m = p.match(/^\/(\d+)\/files\/(\d+)\/transcript$/)) && method === 'POST') {
+    const b = await body();
+    const f = await one(env.DB, "SELECT * FROM job_files WHERE id = ? AND job_id = ?", +m[2], +m[1]);
+    if (!f) return err('not_found', 404);
+    if (b.transcribe) { const r = await transcribe(env, settings, f); return r.error ? err(r.error, 409) : json(r); }
+    await env.DB.prepare("UPDATE job_files SET transcript=?, transcript_state='done', updated_at=datetime('now') WHERE id=?").bind(String(b.transcript || '').slice(0, 50000), f.id).run();
+    return json({ ok: true });
+  }
+  if ((m = p.match(/^\/(\d+)\/status$/)) && method === 'POST') {
+    const id = +m[1], b = await body();
+    if (!['new', 'working', 'done'].includes(b.status)) return err('status');
+    const j = await one(env.DB, 'SELECT * FROM jobs WHERE id = ?', id);
+    if (!j || j.status === 'draft') return err('not_found', 404);
+    const note = b.note === undefined ? j.status_note : (b.note ? String(b.note).slice(0, 4000) : null);
+    await env.DB.prepare(`UPDATE jobs SET status=?, status_note=?, ${b.status === 'working' ? "picked_at=COALESCE(picked_at, datetime('now'))," : ''}${b.status === 'done' ? "done_at=datetime('now')," : ''} updated_at=datetime('now') WHERE id=?`).bind(b.status, note, id).run();
+    if (b.status !== j.status && b.status !== 'new') await addEvent(env, 'job_' + b.status, { actor: 'claude', body: (note || j.text || '').slice(0, 200) || null });
+    return json({ job: await jobWithFiles(env, id, agentUrl) });
+  }
+  return null;
 }

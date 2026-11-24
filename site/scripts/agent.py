@@ -30,6 +30,16 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
   agent.py cover <post_id> <image file>   |   agent.py cover-time <post_id> <seconds>
   agent.py done <comment_id> ["what I did"]
   agent.py secrets                        ElevenLabs key for transcription (kept in memory, never printed)
+
+  Jobs: Jennie's "new job" sheet (the + on the site): files from her phone + text and/or voice notes.
+  agent.py jobs [--all | --status new,working]   the queue (default: queued, new, working). queued = sent, files still uploading
+  agent.py job <id>                       one job as JSON: text, files (role media|voice, name, size, state), voice transcripts.
+                                          Voice notes without a transcript are transcribed now (site, else Scribe on this Mac)
+  agent.py download-job <id> <dir>        every file of the job into <dir>, plus <dir>/job.json (text + transcripts)
+  agent.py job-status <id> working|done|new [--note "what I'm doing / what came out"]   she sees status + note on the site;
+                                          working and done also ring her bell
+  agent.py set-elevenlabs-key             copy ELEVENLABS_API_KEY from this Mac (env / jennie-edit-kit / video-use .env) into
+                                          the site's encrypted settings, so the site transcribes voice notes itself. Never printed
 """
 import base64, json, os, subprocess, sys, tempfile, time, urllib.parse, urllib.request, urllib.error
 
@@ -142,6 +152,89 @@ def upload(post_id, path, note=None):
     print(json.dumps(r, ensure_ascii=False))
 
 
+KEY_FILES = [os.path.expanduser(p) for p in ("~/code/jennie-edit-kit/.env", "~/code/video-use/.env")]
+
+
+def local_key(name="ELEVENLABS_API_KEY"):
+    """Same lookup as jennie-edit-kit/scripts/_env.py. The value stays in memory."""
+    if os.environ.get(name):
+        return os.environ[name]
+    for path in KEY_FILES:
+        if not os.path.exists(path):
+            continue
+        for line in open(path):
+            line = line.strip()
+            if line.startswith(name + "="):
+                v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if v:
+                    return v
+    return None
+
+
+def fetch_to(url, dest):
+    c = conf()
+    req = urllib.request.Request(url)
+    req.add_header("user-agent", "agency-approvals-agent/1.0")
+    if url.startswith(c["url"].rstrip("/") + "/api/agent/"):
+        req.add_header("authorization", "Bearer " + c["agent_token"])
+    with urllib.request.urlopen(req, timeout=1800) as r, open(dest, "wb") as f:
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+    return dest
+
+
+def scribe_local(path, key):
+    """ElevenLabs Scribe v3 (Hebrew) on this Mac: the fallback when the site has no key."""
+    boundary = "----agent" + os.urandom(8).hex()
+    fields = {"model_id": "scribe_v3", "language_code": "he", "tag_audio_events": "false", "diarize": "false"}
+    body = b""
+    for k, v in fields.items():
+        body += f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+    body += f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{os.path.basename(path)}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode()
+    body += open(path, "rb").read() + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request("https://api.elevenlabs.io/v1/speech-to-text", data=body, method="POST")
+    req.add_header("xi-api-key", key)
+    req.add_header("content-type", "multipart/form-data; boundary=" + boundary)
+    with urllib.request.urlopen(req, timeout=600) as r:
+        return (json.loads(r.read()).get("text") or "").strip()
+
+
+def fill_transcripts(job):
+    """Voice notes without a transcript: ask the site; if it has no key, Scribe here and save it back."""
+    for f in job.get("files", []):
+        if f["role"] != "voice" or f["state"] != "ready" or f.get("transcript_state") == "done":
+            continue
+        c = conf()
+        req = urllib.request.Request(c["url"].rstrip("/") + f"/api/agent/jobs/{job['id']}/files/{f['id']}/transcript",
+                                     data=json.dumps({"transcribe": True}).encode(), method="POST")
+        req.add_header("authorization", "Bearer " + c["agent_token"])
+        req.add_header("user-agent", "agency-approvals-agent/1.0")
+        req.add_header("content-type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=600) as r:
+                f["transcript"] = json.loads(r.read()).get("transcript", "")
+                f["transcript_state"] = "done"
+                continue
+        except urllib.error.HTTPError:
+            pass
+        key = local_key()
+        if not key:
+            print(f"voice note {f['id']}: no ElevenLabs key on the site or this Mac; not transcribed", file=sys.stderr)
+            continue
+        tmp = os.path.join(tempfile.mkdtemp(), os.path.basename(f.get("name") or "voice.m4a"))
+        fetch_to(f["url"], tmp)
+        try:
+            f["transcript"] = scribe_local(tmp, key)
+            f["transcript_state"] = "done"
+            call("POST", f"/jobs/{job['id']}/files/{f['id']}/transcript", {"transcript": f["transcript"]})
+        except urllib.error.HTTPError as e:
+            print(f"voice note {f['id']}: Scribe error {e.code}", file=sys.stderr)
+    return job
+
+
 def data_url(path):
     """JPEG data URL under ~1 MB; big images are shrunk with sips (Mac) first."""
     if os.path.getsize(path) > 900_000 or not path.lower().endswith((".jpg", ".jpeg")):
@@ -239,6 +332,45 @@ def main(a):
     elif cmd == "mark-scheduled":
         at = opt(a, "--at")
         out = call("POST", f"/posts/{int(a[0])}/scheduled", {"at": at})
+    elif cmd == "jobs":
+        st = "all" if "--all" in a else opt(a, "--status", "queued,new,working")
+        jobs = call("GET", "/jobs?status=" + urllib.parse.quote(st)).get("jobs", [])
+        out = [{"id": j["id"], "status": j["status"], "sent_at": j.get("sent_at"), "text": j.get("text"), "note": j.get("status_note"),
+                "files": sum(1 for f in j["files"] if f["role"] == "media"),
+                "voice": [f.get("transcript") or f"(voice note {f['id']}, not transcribed yet)" for f in j["files"] if f["role"] == "voice"],
+                "uploading": sum(1 for f in j["files"] if f["state"] == "uploading")} for j in jobs]
+    elif cmd == "job":
+        out = fill_transcripts(call("GET", f"/jobs/{int(a[0])}")["job"])
+    elif cmd == "download-job":
+        job = fill_transcripts(call("GET", f"/jobs/{int(a[0])}")["job"])
+        d = a[1] if len(a) > 1 else f"job-{job['id']}"
+        os.makedirs(d, exist_ok=True)
+        files = []
+        for f in job["files"]:
+            if f["state"] != "ready":
+                print(f"skip file {f['id']} ({f['name']}): {f['state']}", file=sys.stderr)
+                continue
+            name = f"{f['id']}-{os.path.basename(f.get('name') or 'file')}"
+            print(f"downloading {name} ({(f.get('size') or 0) // 1024 // 1024} MB)…", file=sys.stderr)
+            fetch_to(f["url"], os.path.join(d, name))
+            files.append({**{k: f.get(k) for k in ("id", "role", "name", "content_type", "size", "transcript")}, "file": os.path.abspath(os.path.join(d, name))})
+        meta = {"id": job["id"], "status": job["status"], "sent_at": job.get("sent_at"), "text": job.get("text"), "files": files}
+        json.dump(meta, open(os.path.join(d, "job.json"), "w"), ensure_ascii=False, indent=1)
+        out = meta
+    elif cmd == "job-status":
+        note = opt(a, "--note")
+        body = {"status": a[1]}
+        if note is not None:
+            body["note"] = note
+        out = call("POST", f"/jobs/{int(a[0])}/status", body)["job"]
+        out = {k: out.get(k) for k in ("id", "status", "status_note", "picked_at", "done_at")}
+    elif cmd == "set-elevenlabs-key":
+        k = local_key()
+        if not k:
+            sys.exit("ELEVENLABS_API_KEY not found on this Mac")
+        call("POST", "/settings", {"elevenlabs_key": k})
+        print("elevenlabs key: saved on the site (encrypted)")
+        return
     elif cmd == "secrets":
         k = call("GET", "/secrets").get("elevenlabs_key")
         print("elevenlabs key: " + ("set" if k else "not set"))

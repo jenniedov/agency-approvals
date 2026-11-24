@@ -234,10 +234,13 @@
     client_comment: function (e) { return 'הלקוח כתב' + (e.body ? ': "' + e.body + '"' : ' הערה'); },
     comment: function (e) { return 'הערה חדשה' + (e.body ? ': "' + e.body + '"' : ''); },
     shared: function (e) { return 'נשלח ללקוח לאישור' + (e.post_title ? ': ' + e.post_title : ''); },
-    approved: function (e) { return 'אושר ומוכן לתזמון' + (e.post_title ? ': ' + e.post_title : ''); }
+    approved: function (e) { return 'אושר ומוכן לתזמון' + (e.post_title ? ': ' + e.post_title : ''); },
+    job_working: function (e) { return 'קלוד התחיל לעבוד על המשימה' + (e.body ? ': ' + e.body : ''); },
+    job_done: function (e) { return 'קלוד סיים משימה' + (e.body ? ': ' + e.body : ''); }
   };
   function evHref(e) {
     if ((e.kind === 'new_video' || e.kind === 'new_version') && e.post_id != null) return foryou(e.post_id);
+    if (e.kind === 'job_working' || e.kind === 'job_done') return '#/queue';
     if (e.kind === 'client_comment' || e.kind === 'comment') return '#/queue';
     if (e.client_id != null) return '#/client/' + encodeURIComponent(e.client_id);
     return '#/';
@@ -373,6 +376,7 @@
         '</div><p class="small muted">קלוד עובד מהמחשב שלך, אז הוא ממשיך רק כשהמחשב דלוק.</p>' +
         '<a class="link-strong" href="#/queue">לתור המלא</a>';
 
+      html += '<div data-jobs style="margin-top:16px"></div>';
       html += '<div class="cards-2"><section class="card" aria-labelledby="h-ans"><h2 id="h-ans">הלקוחות ענו</h2>' + ansHtml + '</section>' +
         '<section class="card" aria-labelledby="h-cl"><h2 id="h-cl">מה קלוד עושה עכשיו</h2>' + claude + '</section></div>';
 
@@ -392,6 +396,7 @@
         (anyWeek ? '' : '<p class="small muted">עוד לא תוזמן כלום לשבוע הקרוב.</p>') + '</section>';
 
       $main.innerHTML = html;
+      if (window.JobsUI) JobsUI.renderList($main.querySelector('[data-jobs]'), { compact: true });
     }).catch(function (e) { if (guard(token)) showError(e, function () { pageToday(++renderToken); }); });
   }
 
@@ -687,8 +692,10 @@
         '<p class="small muted">כשהמחשב סגור, ההערות מחכות כאן. הן יורדות ברגע שהוא נדלק.</p></section>';
       side += connectionsCard(settings, true);
 
+      html += '<div data-jobs style="margin-bottom:16px"></div>';
       html += '<div class="queue-layout">' + listHtml + '<div style="display:flex;flex-direction:column;gap:16px;min-width:0">' + side + '</div></div>';
       $main.innerHTML = html;
+      if (window.JobsUI) JobsUI.renderList($main.querySelector('[data-jobs]'));
       bindSettingsForm();
     }).catch(function (e) { if (guard(token)) showError(e, function () { pageQueue(++renderToken); }); });
   }
@@ -926,14 +933,17 @@
     toggleNotifs(false);
     if (s.setup_needed) {
       if (path !== '/setup') { history.replaceState(null, '', location.pathname + location.search + '#/setup'); }
+      if (window.JobsUI) JobsUI.hide();
       $shell.hidden = true; $solo.hidden = false; document.title = 'פתיחת חשבון'; pageSetup(); return;
     }
     if (!s.user) {
       if (path !== '/login') history.replaceState(null, '', location.pathname + location.search + '#/login');
+      if (window.JobsUI) JobsUI.hide();
       $shell.hidden = true; $solo.hidden = false; document.title = 'כניסה'; pageLogin(); return;
     }
     if (path === '/login' || path === '/setup') { history.replaceState(null, '', location.pathname + location.search + '#/'); path = '/'; }
     $solo.hidden = true; $solo.innerHTML = ''; $shell.hidden = false;
+    if (window.JobsUI) JobsUI.show(s.user);
     var token = ++renderToken;
     var m;
     if (!state.overview && path !== '/' && path !== '/clients' && path !== '/queue') refreshOverview().catch(function () {});

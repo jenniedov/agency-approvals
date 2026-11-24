@@ -27,6 +27,14 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 
 - `GET /media/r2-<id>.mp4` streams an R2-hosted video (HTTP Range, 206). Needs the session cookie or `?t=<share token>` of the client that owns the post; anything else is 403. Playback URLs of R2 videos point here (with `?t=` on the client screens)
 
+## Jobs (owner only: "+" button, files from the phone + text / voice note for Claude)
+
+- `POST /api/jobs` → `{job, part_size}` creates a draft. `GET /api/jobs` the last 30 sent jobs with files. `GET /api/jobs/<id>`. `DELETE /api/jobs/<id>` (draft only)
+- `POST /api/jobs/<id>/files` `{name, size, content_type, role: media|voice}` → `{file_id, part_size, parts}` starts an R2 multipart upload (≤8 GB)
+- `PUT /api/jobs/<id>/files/<fid>/parts/<n>` body = octet-stream, exactly `part_size` (10 MiB) except the last → `{etag}`. `POST …/files/<fid>/complete` `{parts: [{part_number, etag}]}`
+- `POST …/files/<fid>/transcribe` (voice: ElevenLabs Scribe, Hebrew; 409 `no_key` without the site key). `DELETE …/files/<fid>` (draft only). `GET …/files/<fid>/media` (Range)
+- `POST /api/jobs/<id>/send` `{text, force?}` → status `queued` while files upload, `new` once all are ready. Then `working` / `done` (set by the agent)
+
 ## Screens
 
 - `/foryou` reels feed. Posts with `kind: "story"` never appear in the feed; they show as story rings at the top
@@ -57,6 +65,10 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 - `POST /api/agent/posts/<id>/cover` body = image bytes (`content-type: image/jpeg|png`) → Bunny thumbnail, `cover_url` updated, cover_state pending
 - `POST /api/agent/comments/<id>/done` `{note?}`
 - `GET /api/agent/secrets` → `{elevenlabs_key}` (for transcription on the Mac)
+- `GET /api/agent/jobs?status=queued,new,working|all` → `{jobs}` · `GET /api/agent/jobs/<id>` → `{job}` with file URLs · `GET /api/agent/jobs/<id>/files/<fid>` the file (ready only)
+- `POST /api/agent/jobs/<id>/files/<fid>/transcript` `{transcribe: true}` (on the site) or `{transcript}` (from the Mac)
+- `POST /api/agent/jobs/<id>/status` `{status: new|working|done, note?}`; events `job_working` / `job_done` ring her bell
+- CLI: `agent.py jobs | job <id> | download-job <id> <dir> | job-status <id> <status> --note "…" | set-elevenlabs-key`
 
 ## Shapes
 
