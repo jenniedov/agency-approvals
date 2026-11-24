@@ -145,6 +145,11 @@ body.st-open .fy-top, body.st-open .fy-tabs { visibility: hidden; }
 .s-white-box { background: #fff; color: #000; }
 .s-black-box { background: #000; color: #fff; }
 .s-shadow { background: none; color: #fff; text-shadow: 0 .04em .16em rgba(0, 0, 0, .7); }
+/* placed stickers: the box hugs each line like Instagram (one rounded box per line, lines touching), not one rectangle */
+.st-text:not(.st-ed-box) { background: none; padding: 0; border-radius: 0; line-height: 1.32; }
+.st-text:not(.st-ed-box) > span { padding: .1em .42em; border-radius: .3em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.st-text.s-white-box:not(.st-ed-box) > span { background: #fff; }
+.st-text.s-black-box:not(.st-ed-box) > span { background: #000; }
 .st-trash {
   position: absolute; left: 50%; bottom: 22px; z-index: 7; width: 52px; height: 52px; margin-left: -26px; border-radius: 50%;
   display: grid; place-items: center; background: rgba(0, 0, 0, .55); border: 2px solid #fff; pointer-events: none;

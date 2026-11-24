@@ -9,19 +9,21 @@ Reads the stickers with `agent.py texts <post_id>`, draws them with the same CSS
 import html, json, os, shutil, subprocess, sys, tempfile
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+COLOR = {"white-box": "#000", "black-box": "#fff", "shadow": "#fff"}
 STYLES = {"white-box": "background:#fff;color:#000;", "black-box": "background:#000;color:#fff;",
           "shadow": "background:none;color:#fff;text-shadow:0 .04em .16em rgba(0,0,0,.7);"}
 
 def page(texts):
     items = "".join(
         f'<div class="t" style="left:{t["x"]}%;top:{t["y"]}%;font-size:{t["font_px_at_1080"]}px;'
-        f'max-width:{t.get("width_pct") or 80}%;{STYLES.get(t.get("style"), STYLES["white-box"])}">{html.escape(t["text"])}</div>'
+        f'max-width:{t.get("width_pct") or 80}%;color:{COLOR.get(t.get("style"), "#000")}"><span style="{STYLES.get(t.get("style"), STYLES["white-box"])}">{html.escape(t["text"])}</span></div>'
         for t in texts)
     return f"""<!doctype html><meta charset=utf-8>
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@800&display=block" rel="stylesheet">
 <style>html,body{{margin:0;width:1080px;height:1920px;background:transparent;overflow:hidden}}
-.t{{position:absolute;transform:translate(-50%,-50%);box-sizing:border-box;width:max-content;padding:.22em .5em;border-radius:.4em;
-font-family:Heebo,sans-serif;font-weight:800;line-height:1.25;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere;direction:rtl}}</style>
+.t{{position:absolute;transform:translate(-50%,-50%);box-sizing:border-box;width:max-content;
+font-family:Heebo,sans-serif;font-weight:800;line-height:1.32;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere;direction:rtl}}
+.t>span{{padding:.1em .42em;border-radius:.3em;-webkit-box-decoration-break:clone;box-decoration-break:clone}}</style>
 <body>{items}</body>"""
 
 def main():

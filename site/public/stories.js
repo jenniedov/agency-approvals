@@ -455,7 +455,7 @@
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   function paintText(el, t) {
     el.className = 'st-text s-' + t.style;
-    el.textContent = t.text;
+    el.replaceChildren(h('span', {}, t.text)); // inline span = Instagram-style box per line (stories.css)
     el.style.left = t.x + '%'; el.style.top = t.y + '%';
     el.style.maxWidth = t.width_pct + '%';
     el.style.setProperty('--fs', t.font_px_at_1080);
