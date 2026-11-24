@@ -18,6 +18,9 @@
   --font: "Heebo", "Assistant", system-ui, -apple-system, "Segoe UI", sans-serif; /* Hebrew: never serif */
   --font-latin-display: "Heebo", system-ui, sans-serif;
   --gap: 16px;
+  --video-bg: #0e0d0c;       /* behind the video in For You */
+  --on-video: #ffffff;       /* text and icons over the video */
+  --video-scrim: linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 45%);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
