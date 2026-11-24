@@ -32,6 +32,7 @@ def call(method, path, data=None, raw=None, ctype=None):
     body = raw if raw is not None else (json.dumps(data).encode() if data is not None else None)
     req = urllib.request.Request(c["url"].rstrip("/") + "/api/agent" + path, data=body, method=method)
     req.add_header("authorization", "Bearer " + c["agent_token"])
+    req.add_header("user-agent", "agency-approvals-agent/1.0")  # Cloudflare blocks Python's default agent (error 1010)
     if body is not None:
         req.add_header("content-type", ctype or "application/json")
     try:
@@ -61,6 +62,7 @@ def upload(post_id, path, note=None):
     print(f"uploading {size // 1024 // 1024} MB to Bunny…", file=sys.stderr)
     with open(path, "rb") as f:
         req = urllib.request.Request(v["upload_url"], data=f, method="PUT")
+        req.add_header("user-agent", "agency-approvals-agent/1.0")
         for k, val in v["headers"].items():
             req.add_header(k, val)
         req.add_header("content-type", "application/octet-stream")
