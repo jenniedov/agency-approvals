@@ -12,7 +12,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body { font-family: var(--font); font-size: 16px; line-height: 1.55; color: var(--text); overflow-x: hidden; }
-h1, h2, h3 { margin: 0; line-height: 1.25; font-weight: 700; }
+h1, h2, h3 { margin: 0; line-height: 1.25; font-weight: 600; }
 p { margin: 0; }
 button, textarea, input { font: inherit; color: inherit; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
@@ -30,11 +30,11 @@ button, textarea, input { font: inherit; color: inherit; }
 .who { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text-2); min-width: 0; }
 .who img, .who .ini { width: 30px; height: 30px; border-radius: 50%; flex: none; object-fit: cover; background: var(--surface-2); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; color: var(--text); font-size: 13px; }
 .who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-h1 { font-size: clamp(23px, 6vw, 28px); }
+h1 { font-size: clamp(27px, 7vw, 34px); font-weight: 300; line-height: 1.15; }
 .calm { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: var(--radius); background: var(--surface-2); font-size: 14px; color: var(--text-2); }
 .calm svg { flex: none; width: 20px; height: 20px; margin-top: 1px; color: var(--approve); }
 
-.post { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; display: flex; flex-direction: column; box-shadow: var(--shadow); }
+.post { background: var(--surface); border: 1px solid color-mix(in srgb, var(--line) 55%, transparent); border-radius: var(--radius-lg); overflow: hidden; display: flex; flex-direction: column; box-shadow: var(--shadow); }
 .post-num { padding: 14px 18px 0; font-size: 13px; color: var(--text-2); }
 .player { position: relative; background: var(--frame); display: flex; justify-content: center; }
 .player video { display: block; width: 100%; max-height: 72vh; max-height: 72svh; background: var(--frame); }
@@ -49,10 +49,10 @@ h1 { font-size: clamp(23px, 6vw, 28px); }
 .caption-h { font-size: 15px; }
 .caption { padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; font-size: 15px; white-space: pre-line; overflow-wrap: anywhere; }
 
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 52px; padding: 0 18px; border-radius: 14px; border: 1px solid transparent; background: var(--accent); color: var(--accent-text); font-weight: 700; font-size: 17px; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 52px; padding: 0 18px; border-radius: var(--radius-btn, 14px); border: 1px solid transparent; background: var(--lacquer, var(--accent)); box-shadow: var(--lacquer-shadow, none); color: var(--accent-text); font-weight: 600; font-size: 17px; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 .btn:disabled { opacity: .55; cursor: default; }
-.btn.approve { background: var(--approve); color: var(--surface); }
-.btn.ghost { background: var(--surface); color: var(--text); border-color: var(--text); font-size: 16px; min-height: 48px; }
+.btn.approve { background: var(--lacquer, var(--approve)); color: var(--accent-text); }
+.btn.ghost { background: var(--surface); color: var(--text); border-color: var(--line); box-shadow: none; font-weight: 500; font-size: 16px; min-height: 48px; }
 .btn svg { width: 20px; height: 20px; }
 
 .note { display: flex; flex-direction: column; gap: 8px; }
@@ -89,4 +89,4 @@ details.history[open] summary::after { content: "−"; }
 .skel { background: linear-gradient(90deg, var(--surface-2), var(--line), var(--surface-2)); background-size: 200% 100%; animation: skel 1.3s ease-in-out infinite; border-radius: var(--radius); }
 @keyframes skel { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
-.toast { position: fixed; z-index: 10; left: 50%; transform: translateX(-50%); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); background: var(--accent); color: var(--accent-text); padding: 12px 18px; border-radius: 12px; box-shadow: var(--shadow); font-weight: 500; max-width: calc(100vw - 32px); }
+.toast { position: fixed; z-index: 10; left: 50%; transform: translateX(-50%); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); background: var(--text); color: var(--bg); padding: 12px 20px; border-radius: 999px; box-shadow: var(--shadow); font-weight: 500; max-width: calc(100vw - 32px); }
