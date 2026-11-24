@@ -71,6 +71,8 @@ export async function setThumbnailTime(env, settings, guid, seconds) {
 export function playback(settings, guid, height) {
   // demo videos ship with the site (public/demo) so a fresh install shows something before the first upload
   if (guid && guid.startsWith('demo-')) return { mp4: [`/demo/${guid}.mp4`], hls: null, thumb: `/demo/${guid}.jpg`, embed: null };
+  // no Bunny library: the file sits in the Worker's own R2 bucket (binding MEDIA) and the Worker streams it to logged-in people or share links
+  if (guid && guid.startsWith('r2-')) return { mp4: [`/media/${guid}.mp4`], hls: null, thumb: null, embed: null };
   const cdn = settings.bunny_cdn_host;
   if (!cdn || !guid) return null;
   const h = height || 1080;

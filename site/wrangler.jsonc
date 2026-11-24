@@ -9,11 +9,13 @@
     "directory": "public",
     "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
-    "run_worker_first": ["/api/*", "/c/*", "/foryou", "/cover/*"]
+    "run_worker_first": ["/api/*", "/c/*", "/foryou", "/cover/*", "/media/*"]
   },
   "d1_databases": [
     { "binding": "DB", "database_name": "agency-approvals", "database_id": "local", "migrations_dir": "migrations" }
   ],
+  // Optional, only when there is no Bunny library: videos kept in R2 and streamed by the Worker (R2 needs billing turned on in the account).
+  // "r2_buckets": [ { "binding": "MEDIA", "bucket_name": "<name>-media" } ],
   "vars": { "APP_NAME": "Approvals" },
   "observability": { "enabled": true }
 }

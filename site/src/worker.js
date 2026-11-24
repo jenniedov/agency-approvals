@@ -64,7 +64,8 @@ async function settleStage(env, id) {
   const p = await one(env.DB, 'SELECT * FROM posts WHERE id = ?', id);
   if (!p) return;
   let stage = p.stage;
-  const states = [p.video_state, p.caption_state, p.cover_state];
+  // a story has no caption or cover to approve: the video alone decides
+  const states = p.kind === 'story' ? [p.video_state] : [p.video_state, p.caption_state, p.cover_state];
   if (states.includes('changes')) stage = 'editing';
   else if (states.every((s) => s === 'approved') && ['editing', 'review', 'client'].includes(p.stage) && p.client_state !== 'pending') stage = 'approved';
   else if (p.stage === 'approved' && !states.every((s) => s === 'approved')) stage = 'review';
@@ -120,6 +121,14 @@ async function route(req, env) {
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     return new Response(bytes, { headers: { 'content-type': (head.match(/data:([^;]+)/) || [])[1] || 'image/jpeg', 'cache-control': 'public, max-age=31536000, immutable' } });
   }
+  if ((m = p.match(/^\/media\/(r2-[\w-]+)\.mp4$/)) && (method === 'GET' || method === 'HEAD')) {
+    // R2 video: a logged-in team member, or an end-client share link whose client owns a post with this video
+    let ok = !!(await readSession(env, req).catch(() => null));
+    const t = url.searchParams.get('t');
+    if (!ok && t) ok = !!(await one(env.DB, 'SELECT 1 AS y FROM versions v JOIN posts po ON po.id = v.post_id JOIN clients c ON c.id = po.client_id WHERE v.bunny_guid = ? AND c.share_token = ? AND c.archived = 0', m[1], t));
+    if (!ok) return new Response('login', { status: 403 });
+    return serveMedia(env, req, m[1]);
+  }
   if (!p.startsWith('/api/')) return env.ASSETS.fetch(req);
 
   // Cheap CSRF guard: browser writes must be JSON (a cross-site form cannot send that without a preflight).
@@ -142,7 +151,7 @@ async function route(req, env) {
     const rest = m[2] || '';
     if (rest === '' && method === 'GET') {
       const posts = await all(env.DB, `${POST_SQL} WHERE p.client_id = ? AND (p.client_state = 'pending' OR (p.client_state = 'approved' AND p.updated_at > datetime('now','-30 days'))) ORDER BY p.client_state = 'pending' DESC, p.updated_at DESC LIMIT 30`, client.id);
-      const out = (await expandPosts(env, settings, posts)).map((x) => ({ ...x, comments: x.comments.filter((c) => c.author_kind === 'client') }));
+      const out = (await expandPosts(env, settings, posts)).map((x) => ({ ...x, version: withToken(x.version, client.share_token), comments: x.comments.filter((c) => c.author_kind === 'client') }));
       return json({ brand: brandOf(settings, env), client: { id: client.id, name: client.name, avatar: client.avatar, handle: client.handle }, posts: out });
     }
     if ((m = rest.match(/^\/posts\/(\d+)\/(approve|comment)$/)) && method === 'POST') {
@@ -301,7 +310,7 @@ async function route(req, env) {
     ]);
     // best effort: the chosen cover also becomes the Bunny thumbnail
     const v = await one(env.DB, 'SELECT v.bunny_guid FROM posts p JOIN versions v ON v.id = p.current_version_id WHERE p.id = ?', id);
-    if (v && settings.bunny_key_enc && o.image.startsWith('data:') && !v.bunny_guid.startsWith('demo-')) {
+    if (v && settings.bunny_key_enc && o.image.startsWith('data:') && isBunny(v.bunny_guid)) {
       const bytes = Uint8Array.from(atob(o.image.split(',')[1]), (c) => c.charCodeAt(0));
       await bunny.setThumbnail(env, settings, v.bunny_guid, bytes, 'image/jpeg').catch((e) => console.error('thumb', e));
     }
@@ -385,6 +394,45 @@ async function route(req, env) {
   return err('unknown', 404);
 }
 
+const urlOf = (req) => new URL(req.url);
+const isBunny = (guid) => !!guid && !guid.startsWith('demo-') && !guid.startsWith('r2-');
+const mediaKey = (guid) => `video/${guid}.mp4`;
+function withToken(version, token) {
+  if (!version || !String(version.bunny_guid || '').startsWith('r2-')) return version;
+  return { ...version, mp4: (version.mp4 || []).map((u) => `${u}?t=${encodeURIComponent(token)}`) };
+}
+function downloadUrl(settings, origin, guid, height) {
+  if (!guid) return null;
+  if (guid.startsWith('r2-')) return `${origin}/api/agent/media/${guid}.mp4`;
+  const pb = bunny.playback(settings, guid, height);
+  return pb && pb.mp4[0] ? new URL(pb.mp4[0], origin).toString() : null;
+}
+
+// Stream an R2 video with HTTP Range (Safari on iPhone will not play a video without 206 answers).
+async function serveMedia(env, req, guid) {
+  if (!env.MEDIA) return new Response('no media bucket', { status: 404 });
+  const key = mediaKey(guid);
+  const head = await env.MEDIA.head(key);
+  if (!head) return new Response('not found', { status: 404 });
+  const size = head.size;
+  const base = { 'content-type': (head.httpMetadata && head.httpMetadata.contentType) || 'video/mp4', 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=3600', etag: head.httpEtag };
+  const rh = req.headers.get('range');
+  let range = null;
+  const rm = rh && rh.match(/^bytes=(\d*)-(\d*)$/);
+  if (rm && (rm[1] !== '' || rm[2] !== '')) {
+    let start, end;
+    if (rm[1] === '') { const n = Math.min(+rm[2], size); start = size - n; end = size - 1; }
+    else { start = +rm[1]; end = rm[2] === '' ? size - 1 : Math.min(+rm[2], size - 1); }
+    if (start >= size || start > end) return new Response(null, { status: 416, headers: { ...base, 'content-range': `bytes */${size}` } });
+    range = { offset: start, length: end - start + 1 };
+  }
+  if (req.method === 'HEAD') return new Response(null, { status: 200, headers: { ...base, 'content-length': String(size) } });
+  const obj = await env.MEDIA.get(key, range ? { range } : {});
+  if (!obj) return new Response('not found', { status: 404 });
+  if (!range) return new Response(obj.body, { status: 200, headers: { ...base, 'content-length': String(size) } });
+  return new Response(obj.body, { status: 206, headers: { ...base, 'content-length': String(range.length), 'content-range': `bytes ${range.offset}-${range.offset + range.length - 1}/${size}` } });
+}
+
 const numOrNull = (v) => (v === null || v === undefined || v === '' || isNaN(+v) ? null : Math.max(0, +v));
 const cleanHost = (h) => String(h).trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
 
@@ -453,7 +501,7 @@ async function agentRoutes(req, env, settings, p, body) {
     const n = ((await one(env.DB, 'SELECT MAX(n) AS n FROM versions WHERE post_id = ?', id)).n || 0) + 1;
     const v = await one(env.DB, 'INSERT INTO versions (post_id, n, bunny_guid, duration, width, height, note) VALUES (?,?,?,?,?,?,?) RETURNING *',
       id, n, String(b.bunny_guid), numOrNull(b.duration), b.width ? +b.width : null, b.height ? +b.height : null, b.note || null);
-    const cover = post.cover_url || (settings.bunny_cdn_host ? `https://${settings.bunny_cdn_host}/${v.bunny_guid}/thumbnail.jpg` : null);
+    const cover = post.cover_url || (settings.bunny_cdn_host && isBunny(v.bunny_guid) ? `https://${settings.bunny_cdn_host}/${v.bunny_guid}/thumbnail.jpg` : null);
     await env.DB.prepare(`UPDATE posts SET current_version_id=?, stage='review', video_state='pending', client_state=CASE WHEN client_state='approved' THEN 'none' ELSE client_state END,
       cover_url=COALESCE(?, cover_url), updated_at=datetime('now') WHERE id=?`).bind(v.id, post.cover_url ? null : cover, id).run();
     await addEvent(env, n === 1 ? 'new_video' : 'new_version', { post_id: id, client_id: post.client_id, actor: 'claude', body: b.note || null });
@@ -468,7 +516,7 @@ async function agentRoutes(req, env, settings, p, body) {
     if (typeof b.title === 'string') { sets.push('title=?'); vals.push(b.title.slice(0, 200)); }
     if (b.music !== undefined) { sets.push('music=?'); vals.push(b.music ? JSON.stringify(b.music) : null); }
     if (b.scheduled_at !== undefined) { sets.push('scheduled_at=?'); vals.push(b.scheduled_at || null); }
-    if (b.cover_time !== undefined && post.bunny_guid) {
+    if (b.cover_time !== undefined && post.bunny_guid && isBunny(post.bunny_guid)) {
       await bunny.setThumbnailTime(env, settings, post.bunny_guid, +b.cover_time);
       sets.push("cover_url=?, cover_state='pending'"); vals.push(`https://${settings.bunny_cdn_host}/${post.bunny_guid}/thumbnail.jpg?t=${Date.now()}`);
     }
@@ -480,6 +528,7 @@ async function agentRoutes(req, env, settings, p, body) {
     const id = +m[1];
     const post = await one(env.DB, 'SELECT p.*, v.bunny_guid FROM posts p LEFT JOIN versions v ON v.id = p.current_version_id WHERE p.id = ?', id);
     if (!post || !post.bunny_guid) return err('no_version', 409);
+    if (!isBunny(post.bunny_guid)) return err('bunny_only', 409);
     const file = await bunny.setThumbnail(env, settings, post.bunny_guid, await req.arrayBuffer(), req.headers.get('content-type'));
     const coverUrl = `https://${settings.bunny_cdn_host}/${post.bunny_guid}/${file}?t=${Date.now()}`;
     await env.DB.prepare("UPDATE posts SET cover_url=?, cover_state='pending', updated_at=datetime('now') WHERE id=?").bind(coverUrl, id).run();
@@ -501,6 +550,43 @@ async function agentRoutes(req, env, settings, p, body) {
     const b = await body();
     await env.DB.prepare("UPDATE comments SET status='done', done_note=?, updated_at=datetime('now') WHERE id=?").bind(b.note || null, +m[1]).run();
     return json({ ok: true });
+  }
+  if (p === '/storage' && method === 'GET') {
+    return json({ bunny: !!settings.bunny_key_enc, r2: !!env.MEDIA });
+  }
+  if (p === '/r2/upload' && method === 'PUT') {
+    // the file streams straight into R2 (Worker body limit: 100 MB on the free plan)
+    if (!env.MEDIA) return err('r2_not_bound', 409);
+    const size = +(req.headers.get('content-length') || 0);
+    if (!size || !req.body) return err('content_length');
+    if (size > 100 * 1024 * 1024) return err('too_big', 413);
+    const guid = 'r2-' + randomToken(12).replace(/[^\w-]/g, '').toLowerCase();
+    await env.MEDIA.put(mediaKey(guid), req.body, { httpMetadata: { contentType: req.headers.get('x-content-type') || 'video/mp4' }, customMetadata: { name: String(urlOf(req).searchParams.get('name') || '').slice(0, 200) } });
+    return json({ guid, size });
+  }
+  if ((m = p.match(/^\/media\/(r2-[\w-]+)\.mp4$/)) && (method === 'GET' || method === 'HEAD')) {
+    return serveMedia(env, req, m[1]);
+  }
+  if (p === '/approved' && method === 'GET') {
+    // posts whose video is approved and that are not scheduled or out yet (?all=1: every approved video)
+    const everything = urlOf(req).searchParams.get('all') === '1';
+    const kind = urlOf(req).searchParams.get('kind');
+    const rows = await all(env.DB, `SELECT p.id, p.title, p.kind, p.client_id, c.name AS client_name, p.stage, p.scheduled_at, p.caption, p.updated_at,
+        v.n AS version_n, v.bunny_guid, v.duration, v.width, v.height
+      FROM posts p JOIN clients c ON c.id = p.client_id LEFT JOIN versions v ON v.id = p.current_version_id
+      WHERE p.video_state = 'approved' ${everything ? '' : "AND p.stage NOT IN ('scheduled','published')"} ${kind ? 'AND p.kind = ?' : ''}
+      ORDER BY p.client_id, p.id`, ...(kind ? [kind] : []));
+    const origin = urlOf(req).origin;
+    return json({ posts: rows.map((r) => ({ ...r, download_url: downloadUrl(settings, origin, r.bunny_guid, r.height) })) });
+  }
+  if ((m = p.match(/^\/posts\/(\d+)\/scheduled$/)) && method === 'POST') {
+    const id = +m[1], b = await body();
+    const post = await one(env.DB, 'SELECT * FROM posts WHERE id = ?', id);
+    if (!post) return err('not_found', 404);
+    const at = b.at ? String(b.at).slice(0, 40) : null;
+    await env.DB.prepare("UPDATE posts SET stage='scheduled', scheduled_at=COALESCE(?, scheduled_at), updated_at=datetime('now') WHERE id=?").bind(at, id).run();
+    await addEvent(env, 'scheduled', { post_id: id, client_id: post.client_id, actor: 'claude', body: at });
+    return json({ post: await one(env.DB, `${POST_SQL} WHERE p.id = ?`, id) });
   }
   if (p === '/secrets' && method === 'GET') {
     return json({ elevenlabs_key: await unseal(env, settings.elevenlabs_key_enc).catch(() => null) });

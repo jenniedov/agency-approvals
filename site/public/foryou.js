@@ -86,7 +86,7 @@
   setRail(railSide());
 
   const S = {
-    user: null, brand: null, groups: [], posts: new Map(), clients: new Map(), allClients: null, tracks: null, order: [],
+    user: null, brand: null, groups: [], stories: [], posts: new Map(), clients: new Map(), allClients: null, tracks: null, order: [],
     cards: [], active: null, speed: SPEEDS.includes(store.get('speed', 1)) ? store.get('speed', 1) : 1,
     muted: store.get('muted', false), forcedMute: false, clean: false, sheet: null, modal: null, pop: null, chipClient: null,
   };
@@ -238,6 +238,7 @@
   }
 
   function attach(card) {
+    if (window.FYStories && FYStories.isOpen()) return; // the stories screen holds the shared <video> for now
     if (P.card === card) { if (!S.sheet && P.el.paused && !card._userPaused) play(); return; }
     detach();
     const post = card._fy.post;
@@ -955,11 +956,44 @@
 
   function renderEmpty() {
     document.body.classList.add('is-empty');
+    const st = storiesLeft();
     feed.append(h('section', { class: 'card card-end empty' }, h('div', { class: 'end-in' },
       h('div', { class: 'calm-ic', html: icon('check') }),
-      h('h2', {}, 'הכול מאושר'),
-      h('p', {}, 'אין כרגע סרטונים שמחכים לך. כשיעלה משהו חדש הוא יופיע כאן'),
-      h('a', { class: 'pill-btn solid', href: '/' }, 'למסך הבית'))));
+      h('h2', {}, st ? 'נשארו סטוריז' : 'הכול מאושר'),
+      h('p', {}, st ? (st === 1 ? 'סטורי אחד מחכה לך' : st + ' סטוריז מחכים לך') : 'אין כרגע סרטונים שמחכים לך. כשיעלה משהו חדש הוא יופיע כאן'),
+      st ? h('button', { type: 'button', class: 'pill-btn solid end-stories', onclick: () => openStories(null, null, true) }, 'לצפייה בסטוריז') : null,
+      h('a', { class: 'pill-btn' + (st ? '' : ' solid'), href: '/' }, 'למסך הבית'))));
+  }
+
+  /* ---------- stories (kind = 'story'): Instagram-style screen in stories.js, rings at the top ---------- */
+  const storiesLeft = (clientId) => S.stories.filter((g) => clientId == null || String(g.client.id) === String(clientId))
+    .reduce((n, g) => n + g.posts.filter((p) => p.video_state === 'pending').length, 0);
+  function renderRings() {
+    const box = $('#rings'); if (!box) return;
+    box.replaceChildren(...S.stories.map((g) => {
+      const left = storiesLeft(g.client.id);
+      return h('button', { type: 'button', class: 'fy-ring' + (left ? '' : ' seen'), 'aria-label': 'סטוריז של ' + (g.client.name || '') + (left ? ', ' + left + ' לאישור' : ''), onclick: () => openStories(g.client.id, null, true) },
+        avatar(g.client, 34), left ? h('i', {}, String(left)) : null);
+    }));
+  }
+  function openStories(clientId, postId, gesture) {
+    if (!window.FYStories || !S.stories.length) return false;
+    const back = P.card;
+    detach();
+    if (back) back._userPaused = false;
+    const ok = FYStories.open({
+      sets: S.stories, client: clientId, post: postId, api, video: P.el, muted: S.muted, gesture,
+      onMute: (m) => { S.muted = m; S.forcedMute = false; store.set('muted', m); },
+      onClose: () => {
+        renderRings();
+        if (!S.groups.length) { feed.replaceChildren(); renderEmpty(); }
+        syncMute();
+        if (S.active && S.active._fy.type === 'video') attach(S.active);
+        if (qs.has('stories')) { const u = new URL(location.href); u.searchParams.delete('stories'); history.replaceState(null, '', u); }
+      },
+    });
+    if (!ok && back) attach(back);
+    return ok;
   }
 
   function setActive(card) {
@@ -1586,6 +1620,7 @@
      Keyboard (desktop)
      ================================================================ */
   document.addEventListener('keydown', (e) => {
+    if (window.FYStories && FYStories.isOpen()) return; // the stories screen has its own keys
     if (e.target.closest && e.target.closest('input, textarea, [contenteditable]')) { if (e.key === 'Escape') e.target.blur(); return; }
     if (e.key === 'Escape') { if (S.pop) closePop(); else if (S.modal) S.modal.close(); else if (S.sheet) closeSheet(); else if (S.clean) setClean(false); return; }
     if (S.modal || S.pop) return;
@@ -1604,6 +1639,7 @@
   });
 
   document.addEventListener('visibilitychange', () => {
+    if (window.FYStories && FYStories.isOpen()) return;
     if (document.hidden) P.el.pause();
     else if (P.card && !S.sheet && !P.card._userPaused) play();
   });
@@ -1633,6 +1669,10 @@
           }
         } catch { /* post gone: start at the top */ }
       }
+      // stories leave the reels feed: they get their own Instagram-style screen
+      S.stories = S.groups.map((g) => ({ client: g.client, posts: g.posts.filter((p) => p.kind === 'story') })).filter((g) => g.posts.length);
+      S.groups.forEach((g) => { g.posts = g.posts.filter((p) => p.kind !== 'story'); });
+      S.groups = S.groups.filter((g) => g.posts.length);
     } catch (e) {
       if (e && e.message === 'unauthorized') return;
       $('#loading').remove();
@@ -1642,8 +1682,15 @@
       return;
     }
     render();
+    renderRings();
     $('#loading').remove();
-    const wantPost = qs.get('post'), wantClient = qs.get('client');
+    const wantPost = qs.get('post'), wantClient = qs.get('client'), wantStories = qs.get('stories');
+    const storyPost = wantPost && S.stories.some((g) => g.posts.some((p) => String(p.id) === wantPost));
+    const onlyStories = wantClient && !S.groups.some((g) => String(g.client.id) === wantClient) && S.stories.some((g) => String(g.client.id) === wantClient);
+    if (wantStories != null || storyPost || onlyStories) {
+      const cid = wantStories && wantStories !== '1' && wantStories !== 'all' ? wantStories : (onlyStories ? wantClient : null);
+      if (openStories(cid, storyPost ? wantPost : null, false)) return;
+    }
     let start = null;
     if (wantPost) start = S.cards.find((c) => c._fy.type === 'video' && String(c._fy.post.id) === wantPost);
     if (!start && wantClient) start = S.cards.find((c) => c._fy.post && String(c._fy.post.client_id) === wantClient);

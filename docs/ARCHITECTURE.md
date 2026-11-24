@@ -12,7 +12,7 @@ An approvals system an agency installs on its own accounts. Every install is sin
 | Claude | Claude Code on the agency's Mac. It edits, uploads, writes captions, answers comments through the agent API | the agency's Claude subscription |
 | Transcripts | ElevenLabs, called by Claude on the Mac (key stored in settings, fetched by the agent) | the agency's ElevenLabs account |
 
-No R2, no Workers AI, no paid Cloudflare feature: the install must work on a free account without a card.
+No R2, no Workers AI, no paid Cloudflare feature: the install must work on a free account without a card. The one optional exception: an install without Bunny can bind an R2 bucket as `MEDIA` (see the comment in `site/wrangler.jsonc`); videos then upload to R2 (`bunny_guid` starts with `r2-`) and the Worker streams them at `/media/<guid>.mp4` with Range, to logged-in users and to the owning client's share token only.
 
 ## Data model (one D1, `site/migrations/0001_init.sql`)
 

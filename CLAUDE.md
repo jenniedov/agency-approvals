@@ -19,5 +19,7 @@ This folder is the agency's whole system: client knowledge, edits, and the appro
 2. `agent.py inbox`: open comments (with the second they point at) and posts sent back for changes.
 3. Fix each one in the edit, `agent.py upload <post> <file> --note "<what changed>"`, then `agent.py done <comment> "<what I did>"`.
 4. New edit for a client: `agent.py post <client> "<title>"`, then upload. It shows up in For You for approval.
+5. Stories: `agent.py post <client> "<title>" --kind story`, then upload. They show as story rings at the top of For You (`/foryou?stories=<client>`), not in the reels feed.
+6. Ready to post: `agent.py approved [--kind story]` lists approved videos, `agent.py download <post> [out.mp4]` fetches the file, `agent.py mark-scheduled <post> [--at ISO]` once it is scheduled.
 
 Skills: `/add-client` (from an Instagram or TikTok link), `/upload-edit`, `/prepare-covers` (3 cover options, she picks), `/handle-comments`.

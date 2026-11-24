@@ -10,16 +10,21 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
   agent.py clients
   agent.py post <client_id> "<title>" [--kind reel|story|short|long|post] [--caption "..."]
   agent.py upload <post_id> <video file> [--note "what changed"]     new version → appears in For You
+                                          (Bunny library if the site has one, otherwise the site's own R2 bucket)
+  agent.py approved [--all] [--kind story]   posts whose video is approved (not yet scheduled; --all = also scheduled/published)
+  agent.py download <post_id> [out.mp4]   the current version's file of a post
+  agent.py mark-scheduled <post_id> [--at 2026-11-25T18:00:00+02:00]   stage → scheduled
+  agent.py storage                        where videos go: {"bunny": bool, "r2": bool}
   agent.py caption <post_id> "<text>"
   agent.py cover-options <post_id> <img> [<img> …] [--note "..."]   cover options she picks from (make them with make_covers.py)
   agent.py cover <post_id> <image file>   |   agent.py cover-time <post_id> <seconds>
   agent.py done <comment_id> ["what I did"]
   agent.py secrets                        ElevenLabs key for transcription (kept in memory, never printed)
 """
-import base64, json, os, subprocess, sys, tempfile, time, urllib.request, urllib.error
+import base64, json, os, subprocess, sys, tempfile, time, urllib.parse, urllib.request, urllib.error
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-CONF = os.path.join(ROOT, ".secrets", "site.json")
+CONF = os.environ.get("AGENT_CONF") or os.path.join(ROOT, ".secrets", "site.json")  # AGENT_CONF: another site (e.g. local dev)
 
 
 def conf():
@@ -55,8 +60,49 @@ def probe(path):
         return None, None, None
 
 
+def put_file(url, path, headers):
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        req = urllib.request.Request(url, data=f, method="PUT")
+        req.add_header("user-agent", "agency-approvals-agent/1.0")
+        for k, val in headers.items():
+            req.add_header(k, val)
+        req.add_header("content-length", str(size))
+        try:
+            with urllib.request.urlopen(req, timeout=3600) as r:
+                return json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            sys.exit(f"PUT {url.split('?')[0]} → {e.code} {e.read()[:400].decode(errors='replace')}")
+        except json.JSONDecodeError:
+            return {}
+
+
+def upload_r2(post_id, path, note=None):
+    """No Bunny library: the file goes into the site's R2 bucket through the Worker."""
+    dur, w, h = probe(path)
+    c = conf()
+    size = os.path.getsize(path)
+    if size > 100 * 1024 * 1024:
+        sys.exit("file over 100 MB: the Worker cannot take it in one piece (compress it first)")
+    print(f"uploading {size // 1024 // 1024} MB to the site (R2)…", file=sys.stderr)
+    url = c["url"].rstrip("/") + "/api/agent/r2/upload?name=" + urllib.parse.quote(os.path.basename(path))
+    r = put_file(url, path, {"authorization": "Bearer " + c["agent_token"], "content-type": "application/octet-stream",
+                             "x-content-type": "video/quicktime" if path.lower().endswith(".mov") else "video/mp4"})
+    if not r.get("guid"):
+        sys.exit(f"upload failed: {r}")
+    out = call("POST", f"/posts/{post_id}/versions", {"bunny_guid": r["guid"], "duration": dur, "width": w, "height": h, "note": note})
+    print(json.dumps(out, ensure_ascii=False))
+
+
 def upload(post_id, path, note=None):
     post_id = int(post_id)
+    if not os.path.isfile(path):
+        sys.exit(f"no such file: {path}")
+    st = call("GET", "/storage")
+    if not st.get("bunny"):
+        if not st.get("r2"):
+            sys.exit("the site has no Bunny library and no R2 bucket: add the Bunny key in the settings screen")
+        return upload_r2(post_id, path, note)
     dur, w, h = probe(path)
     v = call("POST", "/bunny/video", {"title": f"{post_id}-{os.path.basename(path)}"})
     size = os.path.getsize(path)
@@ -140,6 +186,39 @@ def main(a):
         out = call("PATCH", f"/posts/{int(a[0])}", {"cover_time": float(a[1])})
     elif cmd == "done":
         out = call("POST", f"/comments/{int(a[0])}/done", {"note": a[1] if len(a) > 1 else None})
+    elif cmd == "storage":
+        out = call("GET", "/storage")
+    elif cmd == "approved":
+        q = []
+        if "--all" in a:
+            a.remove("--all"); q.append("all=1")
+        kind = opt(a, "--kind")
+        if kind:
+            q.append("kind=" + urllib.parse.quote(kind))
+        out = call("GET", "/approved" + ("?" + "&".join(q) if q else "")).get("posts", [])
+    elif cmd == "download":
+        pid = int(a[0])
+        posts = call("GET", "/approved?all=1").get("posts", [])
+        post = next((p for p in posts if p["id"] == pid), None)
+        if not post or not post.get("download_url"):
+            sys.exit(f"post {pid}: no approved video with a file")
+        dest = a[1] if len(a) > 1 else f"{pid}-{post['client_id']}-v{post.get('version_n') or 1}.mp4"
+        c = conf()
+        req = urllib.request.Request(post["download_url"])
+        req.add_header("user-agent", "agency-approvals-agent/1.0")
+        if post["download_url"].startswith(c["url"].rstrip("/") + "/api/agent/"):
+            req.add_header("authorization", "Bearer " + c["agent_token"])
+        with urllib.request.urlopen(req, timeout=600) as r, open(dest, "wb") as f:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+        print(json.dumps({"post": pid, "file": os.path.abspath(dest), "bytes": os.path.getsize(dest)}, ensure_ascii=False))
+        return
+    elif cmd == "mark-scheduled":
+        at = opt(a, "--at")
+        out = call("POST", f"/posts/{int(a[0])}/scheduled", {"at": at})
     elif cmd == "secrets":
         k = call("GET", "/secrets").get("elevenlabs_key")
         print("elevenlabs key: " + ("set" if k else "not set"))

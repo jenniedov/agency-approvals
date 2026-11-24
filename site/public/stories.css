@@ -1,0 +1,160 @@
+/* Stories screen (stories.js), built like Instagram Stories. Dark like For You; tokens from theme.css / foryou.css. */
+.st {
+  position: fixed; inset: 0; z-index: 70;
+  background: #000; color: var(--fy-on, #fff);
+  font-family: var(--fy-font, var(--font));
+  touch-action: none; overscroll-behavior: none;
+  -webkit-user-select: none; user-select: none;
+}
+body.st-open .fy-top, body.st-open .fy-tabs { visibility: hidden; }
+.st-frame { position: absolute; inset: 0; }
+
+/* the 9:16 video sits at the top, the reply bar below it (on tall phones), like Instagram */
+.st-media {
+  position: absolute; top: var(--safe-t, 0px); left: 0; right: 0;
+  aspect-ratio: 9 / 16; width: 100%;
+  max-height: calc(100% - var(--safe-t, 0px) - var(--safe-b, 0px) - 60px);
+  border-radius: 8px; overflow: hidden; background: #111;
+}
+.st-vid, .st-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.st.ready .st-poster { opacity: 0; }
+.st-shade { position: absolute; inset: 0; pointer-events: none; }
+.st-shade::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 110px; background: linear-gradient(to bottom, rgba(0, 0, 0, .45), transparent); }
+.st-tap { position: absolute; inset: 0; z-index: 2; touch-action: none; -webkit-touch-callout: none; cursor: pointer; }
+
+/* segmented progress + who */
+.st-head { position: absolute; top: 0; left: 0; right: 0; z-index: 3; padding: 8px 8px 0; pointer-events: none; transition: opacity .2s; }
+.st-bars { display: flex; gap: 3px; height: 2px; }
+.st-bars i { flex: 1; height: 2px; border-radius: 2px; background: rgba(255, 255, 255, .35); overflow: hidden; }
+.st-bars b { display: block; height: 100%; background: #fff; transform-origin: left center; transform: scaleX(0); }
+.st-bars i.done b { transform: scaleX(1) !important; }
+.st-row { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 2px 0 4px; }
+.st-row > * { pointer-events: auto; }
+.st-row .av { border: 0; box-shadow: 0 0 0 1px rgba(255, 255, 255, .15); }
+.st-who { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .5)); pointer-events: none !important; }
+.st-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
+.st-title { font-size: 12px; color: rgba(255, 255, 255, .78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
+.st-grow { flex: 1; }
+.st-badge:empty { display: none; }
+.st-badge { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 700; direction: rtl; background: rgba(0, 0, 0, .4); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.st-badge .ic { width: 12px; height: 12px; stroke-width: 3; }
+.st-badge.ok { background: var(--fy-like, #a8283c); }
+.st-badge.warn { color: var(--fy-warn, #ff9f0a); }
+.st-ib { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .5)); }
+.st-ib .ic { width: 24px; height: 24px; }
+.st-x .ic { width: 28px; height: 28px; stroke-width: 2.2; }
+.st-pp { display: none; }
+@media (hover: hover) and (pointer: fine) { .st-pp { display: grid; } }
+
+/* hold = pause and the chrome hides, like Instagram */
+.st.holding .st-head, .st.holding .st-bar { opacity: 0; }
+.st.buffering .st-center::after {
+  content: ""; position: absolute; top: 50%; left: 50%; width: 30px; height: 30px; margin: -15px 0 0 -15px;
+  border-radius: 50%; border: 3px solid rgba(255, 255, 255, .25); border-top-color: #fff; animation: st-spin .8s linear infinite;
+}
+@keyframes st-spin { to { transform: rotate(360deg); } }
+.st-center { position: absolute; inset: 0; z-index: 3; pointer-events: none; display: grid; place-items: center; }
+.st-burst { width: 110px; height: 110px; animation: st-pop .85s cubic-bezier(.22, 1, .36, 1) forwards; }
+.st-burst .ic { width: 100%; height: 100%; stroke-width: 1.2; filter: drop-shadow(0 4px 14px rgba(0, 0, 0, .35)); }
+.st-burst .hf { fill: var(--fy-like, #a8283c); stroke: var(--fy-like, #a8283c); }
+.st-burst .hc { stroke: #fff; stroke-width: 2; }
+@keyframes st-pop { 0% { opacity: 0; transform: scale(.4); } 18% { opacity: 1; transform: scale(1.12); } 32% { transform: scale(.95); } 45% { transform: scale(1); } 78% { opacity: 1; } 100% { opacity: 0; transform: scale(1.05); } }
+.st-err { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; pointer-events: none; font-size: 15px; }
+.st-err:empty { display: none; }
+.st-err > * { pointer-events: auto; }
+
+/* reply bar: rounded "send message" box, approve where Instagram has the heart */
+.st-bar {
+  position: absolute; left: 0; right: 0; bottom: calc(var(--safe-b, 0px) + var(--kb, 0px)); z-index: 4;
+  display: flex; align-items: center; gap: 12px; height: 60px; padding: 8px 12px;
+  transition: opacity .2s;
+}
+.st-input {
+  flex: 1; min-width: 0; height: 44px; padding: 0 18px; border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .6); background: transparent; color: #fff;
+  font: 400 16px var(--fy-font, var(--font)); outline: none; -webkit-user-select: text; user-select: text;
+}
+.st-input::placeholder { color: rgba(255, 255, 255, .85); }
+.st-input:focus { border-color: #fff; background: rgba(0, 0, 0, .25); }
+.st-approve { flex: none; width: 44px; height: 44px; display: grid; place-items: center; }
+.st-approve .ic { width: 30px; height: 30px; stroke-width: 1.8; }
+.st-approve .hf { transition: fill .2s, stroke .2s; }
+.st-approve.on .hf { fill: var(--fy-like, #a8283c); stroke: var(--fy-like, #a8283c); }
+.st-approve.on .hc { stroke: var(--fy-on, #fff); stroke-width: 2.2; }
+.st-approve:active { transform: scale(.88); }
+.st-send { display: none; flex: none; height: 44px; padding: 0 4px; font-size: 16px; font-weight: 700; color: #fff; }
+.st-send:disabled { opacity: .5; }
+.st.has-text .st-send { display: block; }
+.st.has-text .st-approve { display: none; }
+
+.st-toast {
+  position: absolute; left: 50%; bottom: calc(var(--safe-b, 0px) + var(--kb, 0px) + 74px); z-index: 6;
+  padding: 10px 16px; border-radius: 10px; background: var(--fy-sheet, #262626); color: #fff; font-size: 14px; white-space: nowrap;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .45); transform: translate(-50%, 10px); opacity: 0; pointer-events: none; transition: opacity .2s, transform .25s;
+}
+.st-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* end card */
+.st-end { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; background: rgba(0, 0, 0, .82); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.st-end[hidden] { display: none; }
+.st-end-in { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 32px; text-align: center; max-width: 340px; }
+.st-end-ic { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .85); }
+.st-end-ic .ic { width: 34px; height: 34px; stroke-width: 2; }
+.st-end-ic.ok { border: 0; }
+.st-end-ic.ok .ic { width: 64px; height: 64px; stroke-width: 1.3; }
+.st-end-ic.ok .hf { fill: var(--fy-like, #a8283c); stroke: var(--fy-like, #a8283c); }
+.st-end-ic.ok .hc { stroke: #fff; stroke-width: 2; }
+.st-end h2 { margin: 6px 0 0; font-size: 22px; font-weight: 700; }
+.st-end p { margin: 0; font-size: 15px; color: var(--fy-text-2, #a8a8a8); line-height: 1.45; }
+.st-end-acts { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
+.st-pill { display: inline-flex; align-items: center; justify-content: center; height: 40px; padding: 0 20px; border-radius: 10px; background: var(--fy-sheet-2, #363636); color: #fff; font-size: 15px; font-weight: 600; }
+.st-pill.solid { background: var(--fy-accent, #b8364a); }
+.st.at-end .st-bar { opacity: .25; pointer-events: none; }
+
+/* desktop arrows (instagram.com shows round chevrons beside the story) */
+.st-nav { display: none; }
+
+/* desktop: a phone-sized story centred on a dark page, like instagram.com/stories */
+@media (min-width: 900px) {
+  .st { background: #1a1a1a; }
+  .st-frame {
+    inset: auto; top: 16px; left: 50%; transform: translateX(-50%);
+    height: calc(100dvh - 32px); width: calc((100dvh - 32px) * 9 / 16);
+    border-radius: 8px; overflow: hidden; background: #000;
+  }
+  .st-media { top: 0; inset: 0; max-height: none; aspect-ratio: auto; border-radius: 0; }
+  .st-media::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 120px; background: linear-gradient(to top, rgba(0, 0, 0, .55), transparent); pointer-events: none; }
+  .st-bar { bottom: 0; }
+  .st-name, .st-title { max-width: 180px; }
+  .st-nav {
+    display: grid; place-items: center; position: absolute; top: 50%; z-index: 2;
+    width: 32px; height: 32px; margin-top: -16px; border-radius: 50%; background: rgba(255, 255, 255, .85); color: #111;
+  }
+  .st-nav .ic { width: 18px; height: 18px; stroke-width: 2.6; }
+  .st-nav.prev { left: calc(50% - (100dvh - 32px) * 9 / 32 - 48px); }
+  .st-nav.next { left: calc(50% + (100dvh - 32px) * 9 / 32 + 16px); }
+  .st-nav:disabled { opacity: 0; pointer-events: none; }
+}
+
+/* story rings at the top of For You (one per client with stories) */
+.fy-rings:empty { display: none; }
+.fy-rings { flex: none; display: flex; gap: 6px; }
+.fy-ring {
+  position: relative; flex: none; width: 38px; height: 38px; padding: 2px; border-radius: 50%;
+  background: conic-gradient(from 200deg, #f2c27b, #d8566a, #8a1c33, #d8566a, #f2c27b);
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .35));
+}
+.fy-ring.seen { background: rgba(255, 255, 255, .45); }
+.fy-ring .av { width: 100% !important; height: 100% !important; border: 2px solid #000; font-size: 14px !important; }
+.fy-ring i {
+  position: absolute; bottom: -3px; left: -3px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px;
+  background: var(--fy-accent, #b8364a); color: #fff; border: 2px solid #000;
+  font: italic 500 11px/13px var(--font-latin-display); text-align: center;
+}
+.fy-ring.seen i { display: none; }
+.end-stories { margin-top: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .st-burst { animation: st-fade .9s linear forwards; }
+  @keyframes st-fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+}

@@ -25,6 +25,9 @@ posts = [
     ("מבצע סוף שבוע", "story", "vertical", "demo-3", 8, 720, 1280, "שישי-שבת: קפה + מאפה ב-25 ₪", "review"),
     ("סרטון היכרות ארוך", "long", "horizontal", "demo-4", 14, 1280, 720, "הכירו את הצוות שמאחורי הדלפק", "review"),
     ("מאחורי הבר", "reel", "vertical", "demo-5", 9, 720, 1280, "ככה נראה אספרסו כפול כשאף אחד לא ממהר ☕️", "review"),
+    # stories open in the Instagram-style stories screen (/foryou?stories=demo-cafe), not in the reels feed
+    ("סטורי: יוצא מהתנור", "story", "vertical", "demo-1", 9, 720, 1280, None, "review"),
+    ("סטורי: הכוס של הבוקר", "story", "vertical", "demo-5", 9, 720, 1280, None, "review"),
 ]
 for i, (title, kind, orient, guid, dur, w, h, cap, stage) in enumerate(posts, 1):
     out.append(f"INSERT INTO posts (client_id, title, kind, orientation, stage, caption, cover_url) VALUES "
@@ -33,7 +36,7 @@ for i, (title, kind, orient, guid, dur, w, h, cap, stage) in enumerate(posts, 1)
     out.append("UPDATE posts SET current_version_id = (SELECT MAX(id) FROM versions) WHERE id = (SELECT MAX(id) FROM posts);")
     out.append("INSERT INTO events (kind, post_id, client_id, actor) VALUES ('new_video', (SELECT MAX(id) FROM posts), 'demo-cafe', 'claude');")
     notes = ["כותרת גדולה למטה", "כותרת בתיבה לבנה", "פריים נקי בלי טקסט"]
-    for n in (1, 2, 3):  # cover options Claude prepared (scripts/make_covers.py); the team picks one
+    for n in ((1, 2, 3) if kind != "story" else ()):  # cover options Claude prepared (scripts/make_covers.py); the team picks one
         out.append(f"INSERT INTO cover_options (post_id, token, image, note) VALUES ((SELECT MAX(id) FROM posts), {q(secrets.token_urlsafe(12))}, '/demo/covers/{guid}-{n}.jpg', {q(notes[n-1])});")
 out.append("INSERT INTO comments (post_id, version_id, target, at_sec, body, author, author_kind) VALUES ((SELECT MIN(id) FROM posts), (SELECT MIN(id) FROM versions), 'video', 3.2, 'להכניס את הלוגו שנייה אחת קודם', 'Owner', 'team');")
 out.append("INSERT INTO tracks (title, artist, source) VALUES ('Morning Coffee (ספריית אינסטגרם)', NULL, 'instagram'), ('שיר בטוח 1', 'ספרייה שלנו', 'library');")
