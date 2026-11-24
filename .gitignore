@@ -1,0 +1,13 @@
+# keys and the agency's own media never go to git
+.secrets/
+site/.dev.vars
+.dev.vars
+site/.wrangler/
+.wrangler/
+node_modules/
+media/
+clients/*/edits/**/*.mp4
+clients/*/edits/**/*.mov
+clients/*/edits/**/*.wav
+clients/*/raw/
+.DS_Store

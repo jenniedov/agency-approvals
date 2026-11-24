@@ -1,0 +1,33 @@
+/* All look-and-feel tokens live here. Change the design by changing this file first. */
+:root {
+  --bg: #faf8f5;
+  --surface: #ffffff;
+  --surface-2: #f3efe9;
+  --line: #e8e2da;
+  --text: #2b2724;
+  --text-2: #7a716a;
+  --accent: #2b2724;        /* main buttons */
+  --accent-text: #ffffff;
+  --approve: #4f7a5a;
+  --reject: #b4574b;
+  --pending: #c9a46a;
+  --focus: #9c8b7a;
+  --radius: 14px;
+  --radius-lg: 22px;
+  --shadow: 0 1px 2px rgba(43,39,36,.06), 0 8px 24px rgba(43,39,36,.06);
+  --font: "Heebo", "Assistant", system-ui, -apple-system, "Segoe UI", sans-serif; /* Hebrew: never serif */
+  --font-latin-display: "Heebo", system-ui, sans-serif;
+  --gap: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171514; --surface: #201d1b; --surface-2: #2a2623; --line: #36312d;
+    --text: #f2ede8; --text-2: #a69d95; --accent: #f2ede8; --accent-text: #171514;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #171514; --surface: #201d1b; --surface-2: #2a2623; --line: #36312d;
+  --text: #f2ede8; --text-2: #a69d95; --accent: #f2ede8; --accent-text: #171514;
+}
+html { background: var(--bg); color: var(--text); font-family: var(--font); }
+body { margin: 0; background: var(--bg); }
