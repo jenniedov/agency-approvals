@@ -1,21 +1,21 @@
 /* Stories screen (stories.js), built like Instagram Stories. Dark like For You; tokens from theme.css / foryou.css. */
 .st {
-  position: fixed; inset: 0; z-index: 70;
+  position: fixed; inset: 0; z-index: 70; direction: ltr; /* Instagram order (left to right) even on a Hebrew page; Hebrew text inside keeps dir=rtl */
   background: #000; color: var(--fy-on, #fff);
   font-family: var(--fy-font, var(--font));
   touch-action: none; overscroll-behavior: none;
   -webkit-user-select: none; user-select: none;
 }
 body.st-open .fy-top, body.st-open .fy-tabs { visibility: hidden; }
-.st-frame { position: absolute; inset: 0; }
+/* the frame is the 9:16 column: full width on a phone, centred, never wider than the screen allows */
+.st-frame {
+  position: absolute; top: var(--safe-t, 0px); bottom: 0; left: 0; right: 0; margin: 0 auto;
+  width: min(100%, calc((100vh - var(--safe-t, 0px) - var(--safe-b, 0px) - 60px) * 9 / 16));
+  width: min(100%, calc((100dvh - var(--safe-t, 0px) - var(--safe-b, 0px) - 60px) * 9 / 16));
+}
 
 /* the 9:16 video sits at the top, the reply bar below it (on tall phones), like Instagram */
-.st-media {
-  position: absolute; top: var(--safe-t, 0px); left: 0; right: 0;
-  aspect-ratio: 9 / 16; width: 100%;
-  max-height: calc(100% - var(--safe-t, 0px) - var(--safe-b, 0px) - 60px);
-  border-radius: 8px; overflow: hidden; background: #111;
-}
+.st-media { position: relative; width: 100%; aspect-ratio: 9 / 16; border-radius: 8px; overflow: hidden; background: #111; }
 .st-vid, .st-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
 .st.ready .st-poster { opacity: 0; }
 .st-shade { position: absolute; inset: 0; pointer-events: none; }
@@ -31,7 +31,7 @@ body.st-open .fy-top, body.st-open .fy-tabs { visibility: hidden; }
 .st-row { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 2px 0 4px; }
 .st-row > * { pointer-events: auto; }
 .st-row .av { border: 0; box-shadow: 0 0 0 1px rgba(255, 255, 255, .15); }
-.st-who { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .5)); pointer-events: none !important; }
+.st-who { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; line-height: 1.15; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .5)); pointer-events: none !important; }
 .st-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
 .st-title { font-size: 12px; color: rgba(255, 255, 255, .78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
 .st-grow { flex: 1; }
@@ -44,6 +44,7 @@ body.st-open .fy-top, body.st-open .fy-tabs { visibility: hidden; }
 .st-ib .ic { width: 24px; height: 24px; }
 .st-x .ic { width: 28px; height: 28px; stroke-width: 2.2; }
 .st-pp { display: none; }
+.st-aa { font: 800 17px/1 "Heebo", var(--fy-font, sans-serif); letter-spacing: -.02em; }
 @media (hover: hover) and (pointer: fine) { .st-pp { display: grid; } }
 
 /* hold = pause and the chrome hides, like Instagram */
@@ -111,6 +112,62 @@ body.st-open .fy-top, body.st-open .fy-tabs { visibility: hidden; }
 .st-pill.solid { background: var(--fy-accent, #b8364a); }
 .st.at-end .st-bar { opacity: .25; pointer-events: none; }
 
+/* pause: tap the middle (or hold) */
+.st-pind { width: 76px; height: 76px; display: grid; place-items: center; border-radius: 50%; background: rgba(0, 0, 0, .45); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.st-pind .ic { width: 34px; height: 34px; }
+.st-pind.out { animation: st-out .6s ease-out forwards; }
+@keyframes st-out { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(1.25); } }
+
+/* comment at a chosen second: scrubber above the reply bar */
+.st-scrub {
+  position: absolute; left: 12px; right: 12px; bottom: calc(var(--safe-b, 0px) + var(--kb, 0px) + 62px); z-index: 5;
+  display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 16px; border-radius: 999px;
+  background: rgba(0, 0, 0, .55); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.st-scrub[hidden] { display: none; }
+.st-scrub-t { flex: none; min-width: 38px; text-align: right; font: 700 15px var(--fy-font, sans-serif); font-variant-numeric: tabular-nums; }
+.st-range { -webkit-appearance: none; appearance: none; flex: 1; min-width: 0; height: 32px; margin: 0; background: transparent; touch-action: pan-y; cursor: pointer; }
+.st-range::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: rgba(255, 255, 255, .4); }
+.st-range::-moz-range-track { height: 4px; border-radius: 4px; background: rgba(255, 255, 255, .4); }
+.st-range::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; margin-top: -9px; border-radius: 50%; background: #fff; box-shadow: 0 1px 6px rgba(0, 0, 0, .5); }
+.st-range::-moz-range-thumb { width: 22px; height: 22px; border: 0; border-radius: 50%; background: #fff; }
+.st.at-end .st-scrub { display: none; }
+
+/* text captions on the story: scale with the frame (--u = frame width / 1080) */
+.st-texts { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+.st-text {
+  position: absolute; box-sizing: border-box; width: max-content; max-width: 80%; padding: .22em .5em; border-radius: .4em;
+  font-family: "Heebo", var(--fy-font, sans-serif); font-weight: 800; font-size: calc(var(--fs, 72) * var(--u, .36px)); line-height: 1.25;
+  text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; direction: rtl;
+  pointer-events: auto; touch-action: none; cursor: grab; -webkit-touch-callout: none;
+}
+.st-text.hide { visibility: hidden; }
+.s-white-box { background: #fff; color: #000; }
+.s-black-box { background: #000; color: #fff; }
+.s-shadow { background: none; color: #fff; text-shadow: 0 .04em .16em rgba(0, 0, 0, .7); }
+.st-trash {
+  position: absolute; left: 50%; bottom: 22px; z-index: 7; width: 52px; height: 52px; margin-left: -26px; border-radius: 50%;
+  display: grid; place-items: center; background: rgba(0, 0, 0, .55); border: 2px solid #fff; pointer-events: none;
+  opacity: 0; transform: scale(.8); transition: opacity .15s, transform .15s, background .15s;
+}
+.st-trash .ic { width: 26px; height: 26px; }
+.st.dragging-text .st-trash { opacity: 1; transform: none; }
+.st.dragging-text .st-trash.hot { background: #e0344a; transform: scale(1.2); }
+.st.dragging-text .st-bar, .st.editing .st-bar, .st.editing .st-scrub { opacity: 0; pointer-events: none; }
+.st-ed { position: absolute; inset: 0; z-index: 9; background: rgba(0, 0, 0, .62); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); touch-action: none; }
+.st-ed-top { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; }
+.st-ed-style { width: 40px; height: 40px; border-radius: 50%; border: 2px solid #fff; display: grid; place-items: center; font: 800 20px/1 "Heebo", sans-serif; }
+.st-ed-style.s-white-box { background: #fff; color: #000; }
+.st-ed-style.s-black-box { background: #000; color: #fff; }
+.st-ed-style.s-shadow { background: none; color: #fff; text-shadow: 0 1px 4px rgba(0, 0, 0, .8); }
+.st-ed-done { height: 40px; padding: 0 10px; font-size: 17px; font-weight: 700; color: #fff; }
+.st-ed-sz { display: flex; align-items: center; gap: 10px; margin: 4px 22px; }
+.st-ed-a { font: 800 14px "Heebo", sans-serif; flex: none; opacity: .85; }
+.st-ed-a.lg { font-size: 24px; }
+.st-ed-box { left: 50%; top: 36%; transform: translate(-50%, -50%); min-width: 2em; max-width: 90%; outline: none; cursor: text; touch-action: auto; -webkit-user-select: text; user-select: text; z-index: 1; }
+.st-ed-box:focus, .st-ed-box:focus-visible { outline: none !important; box-shadow: none !important; }
+.st-ed-box:empty::before { content: attr(data-ph); opacity: .55; }
+
 /* desktop arrows (instagram.com shows round chevrons beside the story) */
 .st-nav { display: none; }
 
@@ -118,11 +175,11 @@ body.st-open .fy-top, body.st-open .fy-tabs { visibility: hidden; }
 @media (min-width: 900px) {
   .st { background: #1a1a1a; }
   .st-frame {
-    inset: auto; top: 16px; left: 50%; transform: translateX(-50%);
+    inset: auto; margin: 0; top: 16px; left: 50%; transform: translateX(-50%);
     height: calc(100dvh - 32px); width: calc((100dvh - 32px) * 9 / 16);
     border-radius: 8px; overflow: hidden; background: #000;
   }
-  .st-media { top: 0; inset: 0; max-height: none; aspect-ratio: auto; border-radius: 0; }
+  .st-media { position: absolute; inset: 0; width: auto; aspect-ratio: auto; border-radius: 0; }
   .st-media::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 120px; background: linear-gradient(to top, rgba(0, 0, 0, .55), transparent); pointer-events: none; }
   .st-bar { bottom: 0; }
   .st-name, .st-title { max-width: 180px; }

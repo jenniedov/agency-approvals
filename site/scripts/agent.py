@@ -12,6 +12,13 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
   agent.py upload <post_id> <video file> [--note "what changed"]     new version → appears in For You
                                           (Bunny library if the site has one, otherwise the site's own R2 bucket)
   agent.py approved [--all] [--kind story]   posts whose video is approved (not yet scheduled; --all = also scheduled/published)
+  agent.py texts <post_id>                text captions Jennie placed on a story (JSON list), to bake into the video before posting.
+                                          Also in `approved` output as the `texts` field of each post. Per text:
+                                          text (Hebrew, RTL, may contain newlines), style (white-box = white rounded box + black text,
+                                          black-box = black rounded box + white text, shadow = white text with a soft shadow),
+                                          x, y = CENTRE of the box in percent of a 1080x1920 frame (50,50 = middle), width_pct = MAX box width (box shrink-wraps the text; padding included) in
+                                          percent of the 1080 width, font_px_at_1080 = font size in px on the 1080 px wide frame,
+                                          rotation in degrees. Font Heebo ExtraBold (800), centred, line-height 1.25; box padding .22em .5em, radius .4em
   agent.py download <post_id> [out.mp4]   the current version's file of a post
   agent.py mark-scheduled <post_id> [--at 2026-11-25T18:00:00+02:00]   stage → scheduled
   agent.py storage                        where videos go: {"bunny": bool, "r2": bool}
@@ -196,6 +203,8 @@ def main(a):
         if kind:
             q.append("kind=" + urllib.parse.quote(kind))
         out = call("GET", "/approved" + ("?" + "&".join(q) if q else "")).get("posts", [])
+    elif cmd == "texts":
+        out = call("GET", f"/posts/{int(a[0])}/texts").get("texts", [])
     elif cmd == "download":
         pid = int(a[0])
         posts = call("GET", "/approved?all=1").get("posts", [])

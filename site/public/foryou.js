@@ -1670,7 +1670,7 @@
         } catch { /* post gone: start at the top */ }
       }
       // stories leave the reels feed: they get their own Instagram-style screen
-      S.stories = S.groups.map((g) => ({ client: g.client, posts: g.posts.filter((p) => p.kind === 'story') })).filter((g) => g.posts.length);
+      S.stories = S.groups.map((g) => ({ client: g.client, posts: g.posts.filter((p) => p.kind === 'story').sort((a, b) => a.id - b.id) })).filter((g) => g.posts.length);
       S.groups.forEach((g) => { g.posts = g.posts.filter((p) => p.kind !== 'story'); });
       S.groups = S.groups.filter((g) => g.posts.length);
     } catch (e) {

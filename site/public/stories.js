@@ -17,6 +17,7 @@
     prev: '<path d="M15 5l-7 7 7 7"/>',
     next: '<path d="M9 5l7 7-7 7"/>',
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    trash: '<path d="M5 7h14M10 7V4.5h4V7M7 7l1 12.5h8L17 7M10.5 11v5M13.5 11v5"/>',
     note: '<path d="M20.7 16.9A9.6 9.6 0 1 0 17 20.6L21.8 22z"/>',
   };
   const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[n] || ''}</svg>`;
@@ -59,7 +60,7 @@
     if (opts.post != null) i = Math.max(0, list.findIndex((x) => String(x.post.id) === String(opts.post)));
     else if (opts.client != null) {
       const inSet = list.map((x, n) => [x, n]).filter(([x]) => String(x.set.client.id) === String(opts.client));
-      const firstOpen = inSet.find(([x]) => x.post.video_state === 'pending') || inSet[0];
+      const firstOpen = inSet.find(([x]) => x.post.video_state === 'pending') || inSet.find(([x]) => x.post.video_state !== 'approved') || inSet[0];
       if (firstOpen) i = firstOpen[1];
     } else {
       const firstOpen = list.findIndex((x) => x.post.video_state === 'pending');
@@ -67,7 +68,8 @@
     }
 
     const vid = opts.video || document.createElement('video');
-    const root = h('div', { class: 'st', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'סטוריז לאישור' });
+    list.forEach((x) => { if (!Array.isArray(x.post.texts)) x.post.texts = []; });
+    const root = h('div', { class: 'st', dir: 'ltr', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'סטוריז לאישור' });
     const frame = h('div', { class: 'st-frame' });
     const media = h('div', { class: 'st-media' });
     const poster = h('img', { class: 'st-poster', alt: '' });
@@ -75,6 +77,11 @@
     const bars = h('div', { class: 'st-bars' });
     const head = h('div', { class: 'st-head', dir: 'ltr' }, bars, h('div', { class: 'st-row' }));
     const center = h('div', { class: 'st-center', 'aria-hidden': 'true' });
+    const texts = h('div', { class: 'st-texts' });
+    const trash = h('div', { class: 'st-trash', 'aria-hidden': 'true', html: icon('trash') });
+    const scrubT = h('span', { class: 'st-scrub-t' }, '0:00');
+    const range = h('input', { type: 'range', class: 'st-range', min: '0', max: '1', step: '0.05', value: '0', 'aria-label': 'בחירת השנייה להערה' });
+    const scrub = h('div', { class: 'st-scrub', dir: 'ltr', hidden: true }, range, scrubT);
     const verr = h('div', { class: 'st-err' });
     const input = h('input', { class: 'st-input', type: 'text', dir: 'rtl', placeholder: 'הערה...', 'aria-label': 'הערה לסטורי, נשמרת בשנייה הנוכחית', enterkeyhint: 'send', autocomplete: 'off' });
     const approveBtn = h('button', { type: 'button', class: 'st-approve', 'aria-label': 'אישור הסטורי', html: icon('approve') });
@@ -91,14 +98,14 @@
     vid.setAttribute('playsinline', '');
     vid.preload = 'auto';
     vid.muted = !!opts.muted || !opts.gesture;
-    media.append(poster, vid, h('div', { class: 'st-shade' }), tap, head, center, verr);
-    frame.append(media, bar, end, toastEl);
+    media.append(poster, vid, h('div', { class: 'st-shade' }), tap, texts, head, center, verr, trash);
+    frame.append(media, scrub, bar, end, toastEl);
     root.append(frame, navPrev, navNext);
     document.body.append(root);
     document.body.classList.add('st-open');
 
-    V = { opts, list, i, root, frame, media, vid, poster, tap, bars, head, center, verr, input, approveBtn, sendBtn, bar, toastEl, end,
-      raf: 0, held: false, typing: false, userPaused: false, ended: false, srcIdx: 0, srcs: [], approvedNow: new Set(), notedNow: new Set(), onKey: null, onVid: {} };
+    V = { opts, list, i, root, frame, media, texts, trash, scrub, range, scrubT, vid, poster, tap, bars, head, center, verr, input, approveBtn, sendBtn, bar, toastEl, end,
+      raf: 0, held: false, typing: false, editing: false, scrubbing: false, ro: null, lastStyle: 'white-box', saveT: {}, userPaused: false, ended: false, srcIdx: 0, srcs: [], approvedNow: new Set(), notedNow: new Set(), onKey: null, onVid: {} };
 
     /* video events */
     const on = (ev, fn) => { vid.addEventListener(ev, fn); V.onVid[ev] = fn; };
@@ -114,17 +121,27 @@
       verr.replaceChildren(h('span', {}, 'הסרטון לא נטען'), h('button', { type: 'button', class: 'st-pill', onclick: (e) => { e.stopPropagation(); show(V.i); } }, 'לנסות שוב'));
     });
 
+    const setU = () => media.style.setProperty('--u', (media.clientWidth / 1080) + 'px');
+    setU();
+    if (window.ResizeObserver) { V.ro = new ResizeObserver(setU); V.ro.observe(media); }
     bindTap();
+    range.addEventListener('input', () => { vid.currentTime = +range.value; paintScrub(); });
+    const scrubOn = () => { V.scrubbing = true; };
+    const scrubOff = () => setTimeout(() => { if (V) V.scrubbing = false; }, 400);
+    range.addEventListener('pointerdown', scrubOn); range.addEventListener('touchstart', scrubOn, { passive: true });
+    range.addEventListener('pointerup', scrubOff); range.addEventListener('pointercancel', scrubOff); range.addEventListener('touchend', scrubOff);
     bar.addEventListener('submit', (e) => { e.preventDefault(); send(); });
     approveBtn.addEventListener('click', () => approve());
-    input.addEventListener('focus', () => { V.typing = true; pause(); root.classList.add('typing'); });
-    input.addEventListener('blur', () => { setTimeout(() => { if (!V) return; V.typing = false; root.classList.remove('typing'); if (!input.value.trim()) resume(); }, 120); });
+    input.addEventListener('focus', () => enterComment());
+    input.addEventListener('blur', () => { setTimeout(() => { if (!V || V.scrubbing) return; if (!input.value.trim() && document.activeElement !== input) exitComment(); }, 160); });
     input.addEventListener('input', () => root.classList.toggle('has-text', !!input.value.trim()));
     navPrev.addEventListener('click', () => prev());
     navNext.addEventListener('click', () => next());
     V.onKey = (e) => {
       if (!V) return;
-      if (e.target === input) { if (e.key === 'Escape') { input.value = ''; root.classList.remove('has-text'); input.blur(); } return; }
+      if (V.editing) { if (e.key === 'Escape') { e.preventDefault(); V.finishEditor && V.finishEditor(); } return; }
+      if (e.target === input) { if (e.key === 'Escape') { input.value = ''; root.classList.remove('has-text'); input.blur(); exitComment(); } return; }
+      if (e.target && e.target.type === 'range') return;
       if (e.key === 'Escape') { e.preventDefault(); close(); }
       else if (e.key === 'ArrowRight') { e.preventDefault(); next(); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); }
@@ -146,7 +163,9 @@
     V.i = i; V.ended = false; V.userPaused = false;
     V.end.hidden = true; V.root.classList.remove('at-end', 'ready');
     V.root.classList.add('buffering');
-    V.verr.replaceChildren();
+    V.verr.replaceChildren(); V.center.replaceChildren();
+    V.root.classList.remove('user-paused');
+    renderTexts();
     const { post } = cur();
     const ver = post.version || {};
     V.srcs = (Array.isArray(ver.mp4) ? ver.mp4 : []).filter(Boolean);
@@ -181,6 +200,7 @@
         h('span', { class: 'st-title', dir: 'auto' }, post.title || '')),
       h('span', { class: 'st-badge' }),
       h('span', { class: 'st-grow' }),
+      h('button', { type: 'button', class: 'st-ib st-aa', 'aria-label': 'הוספת טקסט', onclick: () => openEditor(null) }, 'Aa'),
       h('button', { type: 'button', class: 'st-ib st-pp', 'aria-label': paused ? 'המשך' : 'עצירה', html: icon(paused ? 'play' : 'pause'), onclick: () => togglePause() }),
       h('button', { type: 'button', class: 'st-ib st-mute', 'aria-label': muted ? 'הפעלת שמע' : 'השתקה', html: icon(muted ? 'mute' : 'vol'), onclick: () => setMuted(!V.vid.muted) }),
       h('button', { type: 'button', class: 'st-ib st-x', 'aria-label': 'סגירה', html: icon('x'), onclick: () => close() }));
@@ -216,7 +236,7 @@
   }
 
   async function play() {
-    if (!V || V.held || V.typing || V.userPaused || V.ended || !V.vid.getAttribute('src')) return;
+    if (!V || V.held || V.typing || V.editing || V.userPaused || V.ended || !V.vid.getAttribute('src')) return;
     try { await V.vid.play(); }
     catch (e) {
       if (e && e.name === 'NotAllowedError' && !V.vid.muted) {
@@ -226,11 +246,13 @@
     }
   }
   function pause() { if (V) V.vid.pause(); }
-  function resume() { if (V && !V.held && !V.typing && !V.userPaused && !V.ended && V.end.hidden) play(); }
+  function resume() { if (V && !V.held && !V.typing && !V.editing && !V.userPaused && !V.ended && V.end.hidden) play(); }
   function togglePause() {
     V.userPaused = !V.userPaused;
     if (V.userPaused) pause(); else play();
     V.root.classList.toggle('user-paused', V.userPaused);
+    if (V.userPaused) V.center.replaceChildren(h('div', { class: 'st-pind', html: icon('pause') }));
+    else { const b = h('div', { class: 'st-pind out', html: icon('play') }); V.center.replaceChildren(b); setTimeout(() => b.remove(), 600); }
     paintHead(); paintState();
   }
   function setMuted(m) {
@@ -269,13 +291,21 @@
       if (e.pointerId !== id) return;
       id = null; clearTimeout(holdT);
       const dy = e.clientY - y0, dx = e.clientX - x0;
-      if (V.held) { V.held = false; V.root.classList.remove('holding'); if (!cancel && dy > 110) { close(); return; } resume(); return; }
+      const swipe = Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3;
+      if (V.held) {
+        V.held = false; V.root.classList.remove('holding');
+        if (!cancel && dy > 110) { close(); return; }
+        if (!cancel && swipe) { dx < 0 ? next() : prev(); return; }
+        resume(); return;
+      }
       if (cancel) return;
       if (dy > 110 && Math.abs(dy) > Math.abs(dx)) { close(); return; }
+      if (swipe) { dx < 0 ? next() : prev(); return; } // swipe left = next, like Instagram
       if (performance.now() - t0 > 500 || Math.abs(dx) > 14 || Math.abs(dy) > 14) return;
       if (document.activeElement === V.input) { V.input.blur(); return; }
-      const r = tap.getBoundingClientRect();
-      if (e.clientX - r.left < r.width / 3) prev(); else next();
+      if (V.typing) { if (!V.input.value.trim()) exitComment(); return; }
+      const r = tap.getBoundingClientRect(), fx = (e.clientX - r.left) / r.width;
+      if (fx < 1 / 3) prev(); else if (fx > 2 / 3) next(); else togglePause();
     };
     tap.addEventListener('pointerup', (e) => up(e, false));
     tap.addEventListener('pointercancel', (e) => up(e, true));
@@ -322,7 +352,7 @@
     const text = V.input.value.trim();
     if (!text) { V.input.focus(); return; }
     const { post } = cur();
-    const at = round1(V.vid.currentTime || 0);
+    const at = round1(V.typing ? +V.range.value : (V.vid.currentTime || 0));
     V.sendBtn.disabled = true;
     try {
       const r = await V.opts.api('/api/posts/' + post.id + '/comments', { method: 'POST', body: { target: 'video', body: text, at_sec: at } });
@@ -336,13 +366,175 @@
       paintState();
       toast('ההערה נשמרה ב־' + fmt(at));
       V.input.blur();
-      V.typing = false; V.root.classList.remove('typing');
-      resume();
+      exitComment();
     } catch {
       toast('ההערה לא נשמרה, אפשר לנסות שוב');
     } finally {
       if (V) V.sendBtn.disabled = false;
     }
+  }
+
+  /* comment at a chosen second: the video pauses and a scrubber appears above the bar */
+  const durationOf = () => { const d = V.vid.duration; return (d && isFinite(d) ? d : (cur().post.version && cur().post.version.duration)) || 0; };
+  function paintScrub() { V.scrubT.textContent = fmt(+V.range.value); }
+  function enterComment() {
+    if (!V || V.typing) return;
+    V.typing = true; pause();
+    V.root.classList.add('typing', 'commenting');
+    V.range.max = String(durationOf() || 1);
+    V.range.value = String(V.vid.currentTime || 0);
+    V.scrub.hidden = false; paintScrub();
+  }
+  function exitComment() {
+    if (!V) return;
+    V.typing = false; V.scrubbing = false;
+    V.scrub.hidden = true;
+    V.root.classList.remove('typing', 'commenting');
+    resume();
+  }
+
+  /* text captions placed on the story. x, y = centre in % of the frame, width_pct = max box width in % of the frame width,
+     font_px_at_1080 = font size at 1080 px wide. Everything scales with --u (frame width / 1080), so any screen shows the same layout. */
+  const STYLES = ['white-box', 'black-box', 'shadow'];
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  function paintText(el, t) {
+    el.className = 'st-text s-' + t.style;
+    el.textContent = t.text;
+    el.style.left = t.x + '%'; el.style.top = t.y + '%';
+    el.style.maxWidth = t.width_pct + '%';
+    el.style.setProperty('--fs', t.font_px_at_1080);
+    el.style.transform = 'translate(-50%,-50%) rotate(' + (t.rotation || 0) + 'deg)';
+  }
+  function renderTexts(hideId) {
+    const { post } = cur();
+    V.texts.replaceChildren(...post.texts.map((t) => {
+      const el = h('div', { class: 'st-text', dir: 'rtl' });
+      paintText(el, t);
+      if (hideId != null && t.id === hideId) el.classList.add('hide');
+      bindText(el, t, post);
+      return el;
+    }));
+  }
+  function persist(post, t, immediate) {
+    clearTimeout(V.saveT[t._k]);
+    const run = async () => {
+      const body = { text: t.text, style: t.style, x: round1(t.x), y: round1(t.y), width_pct: round1(t.width_pct), font_px_at_1080: Math.round(t.font_px_at_1080), rotation: t.rotation || 0 };
+      try {
+        if (!t.id) { const r = await V.opts.api('/api/posts/' + post.id + '/texts', { method: 'POST', body }); if (r && r.text) t.id = r.text.id; }
+        else await V.opts.api('/api/texts/' + t.id, { method: 'PATCH', body });
+      } catch { toast('הטקסט לא נשמר, אפשר לנסות שוב'); }
+    };
+    if (immediate) return run();
+    V.saveT[t._k] = setTimeout(run, 350);
+  }
+  async function removeText(post, t) {
+    post.texts.splice(post.texts.indexOf(t), 1);
+    if (V.i >= 0 && cur().post === post) renderTexts();
+    if (t.id) { try { await V.opts.api('/api/texts/' + t.id, { method: 'DELETE' }); } catch { toast('המחיקה לא נשמרה'); } }
+  }
+  function scaleText(t, f) {
+    const nf = clamp(t.font_px_at_1080 * f, 24, 220);
+    f = nf / t.font_px_at_1080;
+    t.font_px_at_1080 = nf; t.width_pct = clamp(t.width_pct * f, 20, 100);
+  }
+  let tk = 1;
+  function bindText(el, t, post) {
+    t._k = t._k || tk++;
+    const ptrs = new Map();
+    let st = null;
+    const dist = () => { const [a, b] = [...ptrs.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
+    const base = () => { const [a] = [...ptrs.values()]; st = { x: t.x, y: t.y, px: a.x, py: a.y, d: ptrs.size > 1 ? dist() : 0, font: t.font_px_at_1080, w: t.width_pct, moved: st ? st.moved : false, t0: st ? st.t0 : performance.now() }; };
+    const overTrash = (x, y) => { const r = V.trash.getBoundingClientRect(); return x > r.left - 14 && x < r.right + 14 && y > r.top - 14 && y < r.bottom + 14; };
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
+    el.addEventListener('pointerdown', (e) => {
+      if (V.editing) return;
+      e.stopPropagation();
+      try { el.setPointerCapture(e.pointerId); } catch { /* old Safari */ }
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      base();
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!ptrs.has(e.pointerId) || !st) return;
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const r = V.texts.getBoundingClientRect();
+      if (ptrs.size >= 2) {
+        st.moved = true;
+        const f = dist() / st.d;
+        t.font_px_at_1080 = st.font; t.width_pct = st.w; scaleText(t, f);
+      } else {
+        const [a] = [...ptrs.values()];
+        const dx = a.x - st.px, dy = a.y - st.py;
+        if (!st.moved && Math.hypot(dx, dy) < 6) return;
+        st.moved = true;
+        t.x = clamp(st.x + dx / r.width * 100, 0, 100); t.y = clamp(st.y + dy / r.height * 100, 0, 100);
+        V.root.classList.add('dragging-text');
+        V.trash.classList.toggle('hot', overTrash(a.x, a.y));
+      }
+      paintText(el, t);
+    });
+    const end = (e, cancel) => {
+      if (!ptrs.has(e.pointerId)) return;
+      const hot = ptrs.size === 1 && overTrash(e.clientX, e.clientY);
+      ptrs.delete(e.pointerId);
+      if (ptrs.size) { base(); return; }
+      V.root.classList.remove('dragging-text'); V.trash.classList.remove('hot');
+      const s = st; st = null;
+      if (cancel || !s) return;
+      if (!s.moved && performance.now() - s.t0 < 600) { openEditor(t); return; }
+      if (hot) { removeText(post, t); vibrate(12); return; }
+      persist(post, t);
+    };
+    el.addEventListener('pointerup', (e) => end(e, false));
+    el.addEventListener('pointercancel', (e) => end(e, true));
+  }
+
+  /* the editor: type, cycle the style (like Instagram's "A" box button), size slider, Done */
+  function openEditor(existing) {
+    if (!V || V.editing) return;
+    if (V.typing) { V.input.blur(); exitComment(); }
+    const post = cur().post;
+    const t = existing ? { ...existing } : { id: null, text: '', style: V.lastStyle, x: 50, y: 50, width_pct: 80, font_px_at_1080: 72, rotation: 0 };
+    V.editing = true; pause();
+    V.root.classList.add('editing');
+    renderTexts(existing ? existing.id : null);
+    const box = h('div', { class: 'st-text st-ed-box', contenteditable: 'true', dir: 'rtl', 'data-ph': 'כתיבה...', role: 'textbox', 'aria-label': 'טקסט לסטורי', spellcheck: 'false', autocapitalize: 'off' });
+    const paintBox = () => { box.className = 'st-text st-ed-box s-' + t.style; box.style.setProperty('--fs', t.font_px_at_1080); box.style.maxWidth = t.width_pct + '%'; styleBtn.className = 'st-ed-style s-' + t.style; };
+    const styleBtn = h('button', { type: 'button', class: 'st-ed-style', 'aria-label': 'סגנון הטקסט' }, 'A');
+    let lastFont = t.font_px_at_1080;
+    const size = h('input', { type: 'range', class: 'st-range st-ed-size', min: '28', max: '200', step: '1', value: String(Math.round(t.font_px_at_1080)), 'aria-label': 'גודל הטקסט' });
+    const done = h('button', { type: 'button', class: 'st-ed-done' }, 'סיום');
+    const ed = h('div', { class: 'st-ed', dir: 'ltr' },
+      h('div', { class: 'st-ed-top' }, styleBtn, done),
+      h('div', { class: 'st-ed-sz' }, h('span', { class: 'st-ed-a sm' }, 'A'), size, h('span', { class: 'st-ed-a lg' }, 'A')),
+      box);
+    box.textContent = t.text;
+    paintBox();
+    V.media.append(ed);
+    styleBtn.addEventListener('pointerdown', (e) => e.preventDefault());
+    styleBtn.addEventListener('click', () => { t.style = STYLES[(STYLES.indexOf(t.style) + 1) % STYLES.length]; V.lastStyle = t.style; paintBox(); box.focus(); });
+    size.addEventListener('input', () => { const nf = +size.value; scaleText(t, nf / lastFont); lastFont = nf; paintBox(); });
+    box.addEventListener('input', () => { if (!box.textContent.trim()) box.innerHTML = ''; });
+    box.addEventListener('paste', (e) => { e.preventDefault(); const tx = (e.clipboardData || window.clipboardData).getData('text/plain'); document.execCommand('insertText', false, tx); });
+    const finish = () => {
+      if (!V || !V.editing) return;
+      V.editing = false; V.finishEditor = null;
+      const text = (box.innerText || '').replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+      ed.remove();
+      V.root.classList.remove('editing');
+      t.text = text;
+      if (existing) {
+        if (!text) removeText(post, existing);
+        else { Object.assign(existing, t); persist(post, existing, true); }
+      } else if (text) {
+        post.texts.push(t); persist(post, t, true);
+      }
+      renderTexts();
+      resume();
+    };
+    V.finishEditor = finish;
+    done.addEventListener('click', finish);
+    ed.addEventListener('pointerdown', (e) => { if (e.target === ed) { e.preventDefault(); finish(); } });
+    setTimeout(() => box.focus(), 30);
   }
 
   function burst() {
@@ -399,6 +591,7 @@
     const v = V;
     const s = summary();
     cancelAnimationFrame(v.raf);
+    if (v.ro) v.ro.disconnect();
     document.removeEventListener('keydown', v.onKey, true);
     document.removeEventListener('visibilitychange', v.onVis);
     for (const [ev, fn] of Object.entries(v.onVid)) v.vid.removeEventListener(ev, fn);

@@ -31,10 +31,11 @@ async function expandPosts(env, settings, posts) {
   if (!posts.length) return [];
   const ids = posts.map((p) => p.id);
   const q = ids.map(() => '?').join(',');
-  const [versions, comments, covers] = await Promise.all([
+  const [versions, comments, covers, texts] = await Promise.all([
     all(env.DB, `SELECT * FROM versions WHERE post_id IN (${q}) ORDER BY n DESC`, ...ids),
     all(env.DB, `SELECT * FROM comments WHERE post_id IN (${q}) ORDER BY COALESCE(at_sec, 1e9), id`, ...ids),
     all(env.DB, `SELECT id, post_id, token, note, chosen, created_at FROM cover_options WHERE post_id IN (${q}) ORDER BY id`, ...ids),
+    all(env.DB, `SELECT * FROM story_texts WHERE post_id IN (${q}) ORDER BY id`, ...ids).catch(() => []),
   ]);
   return posts.map((p) => {
     const vs = versions.filter((v) => v.post_id === p.id);
@@ -48,10 +49,22 @@ async function expandPosts(env, settings, posts) {
       versions: vs.map((v) => ({ id: v.id, n: v.n, note: v.note, created_at: v.created_at })),
       cover_options: covers.filter((o) => o.post_id === p.id).map((o) => ({ id: o.id, url: `/cover/${o.token}.jpg`, note: o.note, chosen: !!o.chosen, created_at: o.created_at })),
       comments: comments.filter((c) => c.post_id === p.id).map((c) => ({ ...c, drawing: c.drawing ? safeParse(c.drawing) : null })),
+      texts: texts.filter((t) => t.post_id === p.id && (t.version_id == null || !cur || t.version_id === cur.id)),
     };
   });
 }
 const safeParse = (s) => { try { return JSON.parse(s); } catch { return s; } };
+const TEXT_STYLES = ['white-box', 'black-box', 'shadow'];
+const clampN = (v, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : undefined; };
+function textFields(b) {
+  const o = {};
+  if (typeof b.text === 'string') o.text = b.text.trim().slice(0, 1000);
+  if (TEXT_STYLES.includes(b.style)) o.style = b.style;
+  for (const [k, lo, hi] of [['x', -20, 120], ['y', -20, 120], ['width_pct', 10, 100], ['font_px_at_1080', 16, 400], ['rotation', -180, 180]]) {
+    const v = clampN(b[k], lo, hi); if (v !== undefined) o[k] = v;
+  }
+  return o;
+}
 const POST_SQL = 'SELECT p.*, c.name AS client_name FROM posts p JOIN clients c ON c.id = p.client_id';
 
 async function postById(env, settings, id) {
@@ -328,6 +341,27 @@ async function route(req, env) {
     if (b.target === 'cover') { await env.DB.prepare("UPDATE posts SET cover_state='changes', updated_at=datetime('now') WHERE id=?").bind(id).run(); await settleStage(env, id); }
     return json({ comment: { ...c, drawing: b.drawing || null } });
   }
+  if ((m = p.match(/^\/api\/posts\/(\d+)\/texts$/)) && method === 'POST') {
+    const id = +m[1], b = await body();
+    const post = await one(env.DB, 'SELECT * FROM posts WHERE id = ?', id);
+    if (!post) return err('not_found', 404);
+    const f = textFields(b);
+    if (!f.text) return err('empty');
+    const t = await one(env.DB, 'INSERT INTO story_texts (post_id, version_id, text, style, x, y, width_pct, font_px_at_1080, rotation) VALUES (?,?,?,?,?,?,?,?,?) RETURNING *',
+      id, post.current_version_id, f.text, f.style || 'white-box', f.x ?? 50, f.y ?? 50, f.width_pct ?? 80, f.font_px_at_1080 ?? 72, f.rotation ?? 0);
+    return json({ text: t });
+  }
+  if ((m = p.match(/^\/api\/texts\/(\d+)$/))) {
+    const id = +m[1];
+    if (method === 'DELETE') { await env.DB.prepare('DELETE FROM story_texts WHERE id = ?').bind(id).run(); return json({ ok: true }); }
+    if (method === 'PATCH') {
+      const f = textFields(await body()); const sets = [], vals = [];
+      for (const k of ['text', 'style', 'x', 'y', 'width_pct', 'font_px_at_1080', 'rotation']) if (f[k] !== undefined) { sets.push(`${k}=?`); vals.push(f[k]); }
+      if (!sets.length) return err('nothing');
+      const t = await one(env.DB, `UPDATE story_texts SET ${sets.join(',')}, updated_at=datetime('now') WHERE id=? RETURNING *`, ...vals, id);
+      return t ? json({ text: t }) : err('not_found', 404);
+    }
+  }
   if ((m = p.match(/^\/api\/comments\/(\d+)$/))) {
     const id = +m[1];
     if (method === 'DELETE') { await env.DB.prepare('DELETE FROM comments WHERE id = ?').bind(id).run(); return json({ ok: true }); }
@@ -572,12 +606,19 @@ async function agentRoutes(req, env, settings, p, body) {
     const everything = urlOf(req).searchParams.get('all') === '1';
     const kind = urlOf(req).searchParams.get('kind');
     const rows = await all(env.DB, `SELECT p.id, p.title, p.kind, p.client_id, c.name AS client_name, p.stage, p.scheduled_at, p.caption, p.updated_at,
-        v.n AS version_n, v.bunny_guid, v.duration, v.width, v.height
+        p.current_version_id AS version_id, v.n AS version_n, v.bunny_guid, v.duration, v.width, v.height
       FROM posts p JOIN clients c ON c.id = p.client_id LEFT JOIN versions v ON v.id = p.current_version_id
       WHERE p.video_state = 'approved' ${everything ? '' : "AND p.stage NOT IN ('scheduled','published')"} ${kind ? 'AND p.kind = ?' : ''}
       ORDER BY p.client_id, p.id`, ...(kind ? [kind] : []));
     const origin = urlOf(req).origin;
-    return json({ posts: rows.map((r) => ({ ...r, download_url: downloadUrl(settings, origin, r.bunny_guid, r.height) })) });
+    const texts = rows.length ? await all(env.DB, `SELECT * FROM story_texts WHERE post_id IN (${rows.map(() => '?').join(',')}) ORDER BY id`, ...rows.map((r) => r.id)).catch(() => []) : [];
+    return json({ posts: rows.map((r) => ({ ...r, download_url: downloadUrl(settings, origin, r.bunny_guid, r.height), texts: texts.filter((t) => t.post_id === r.id && (t.version_id == null || t.version_id === r.version_id)) })) });
+  }
+  if ((m = p.match(/^\/posts\/(\d+)\/texts$/)) && method === 'GET') {
+    const post = await one(env.DB, 'SELECT current_version_id FROM posts WHERE id = ?', +m[1]);
+    if (!post) return err('not_found', 404);
+    const texts = await all(env.DB, 'SELECT * FROM story_texts WHERE post_id = ? ORDER BY id', +m[1]);
+    return json({ texts: texts.filter((t) => t.version_id == null || t.version_id === post.current_version_id) });
   }
   if ((m = p.match(/^\/posts\/(\d+)\/scheduled$/)) && method === 'POST') {
     const id = +m[1], b = await body();
