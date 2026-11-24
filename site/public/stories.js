@@ -553,14 +553,13 @@
     if (!V || V.editing) return;
     if (V.typing) { V.input.blur(); exitComment(); }
     const post = cur().post;
-    const t = existing ? { ...existing } : { id: null, text: '', style: V.lastStyle, x: 50, y: 50, width_pct: 80, font_px_at_1080: 72, rotation: 0 };
+    const t = existing ? { ...existing } : { id: null, text: '', style: V.lastStyle, x: 50, y: 50, width_pct: 90, font_px_at_1080: 72, rotation: 0 };
     V.editing = true; pause();
     V.root.classList.add('editing');
     renderTexts(existing ? existing.id : null);
     const box = h('div', { class: 'st-text st-ed-box', contenteditable: 'true', dir: 'rtl', 'data-ph': 'כתיבה...', role: 'textbox', 'aria-label': 'טקסט לסטורי', spellcheck: 'false', autocapitalize: 'off' });
     const paintBox = () => { box.className = 'st-text st-ed-box s-' + t.style; box.style.setProperty('--fs', t.font_px_at_1080); box.style.maxWidth = t.width_pct + '%'; styleBtn.className = 'st-ed-style s-' + t.style; };
     const styleBtn = h('button', { type: 'button', class: 'st-ed-style', 'aria-label': 'סגנון הטקסט' }, 'A');
-    let lastFont = t.font_px_at_1080;
     const size = h('input', { type: 'range', class: 'st-range st-ed-size', min: '28', max: '200', step: '1', value: String(Math.round(t.font_px_at_1080)), 'aria-label': 'גודל הטקסט' });
     const done = h('button', { type: 'button', class: 'st-ed-done' }, 'סיום');
     const ed = h('div', { class: 'st-ed', dir: 'ltr' },
@@ -572,7 +571,8 @@
     V.media.append(ed);
     styleBtn.addEventListener('pointerdown', (e) => e.preventDefault());
     styleBtn.addEventListener('click', () => { t.style = STYLES[(STYLES.indexOf(t.style) + 1) % STYLES.length]; V.lastStyle = t.style; paintBox(); box.focus(); });
-    size.addEventListener('input', () => { const nf = +size.value; scaleText(t, nf / lastFont); lastFont = nf; paintBox(); });
+    // like Instagram: the size slider only changes the letters, the wrap width stays full, so a smaller font fits more words per line
+    size.addEventListener('input', () => { t.font_px_at_1080 = +size.value; t.width_pct = 90; paintBox(); });
     box.addEventListener('input', () => { if (!box.textContent.trim()) box.innerHTML = ''; });
     box.addEventListener('paste', (e) => { e.preventDefault(); const tx = (e.clipboardData || window.clipboardData).getData('text/plain'); document.execCommand('insertText', false, tx); });
     const finish = () => {

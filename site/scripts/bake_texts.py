@@ -22,8 +22,8 @@ def page(texts):
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@800&display=block" rel="stylesheet">
 <style>html,body{{margin:0;width:1080px;height:1920px;background:transparent;overflow:hidden}}
 .t{{position:absolute;transform:translate(-50%,-50%);box-sizing:border-box;width:max-content;
-font-family:Heebo,sans-serif;font-weight:800;line-height:1.32;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere;direction:rtl}}
-.t>span{{padding:.1em .42em;border-radius:.3em;-webkit-box-decoration-break:clone;box-decoration-break:clone}}</style>
+font-family:Heebo,sans-serif;font-weight:800;line-height:1.4;text-align:center;white-space:pre-line;overflow-wrap:anywhere;direction:rtl}}
+.t>span{{padding:0 .42em;border-radius:.3em;-webkit-box-decoration-break:clone;box-decoration-break:clone}}</style>
 <body>{items}</body>"""
 
 def main():
