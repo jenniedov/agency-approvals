@@ -11,9 +11,7 @@ def pw_hash(pw):
     h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 20000, 32)
     return f"pbkdf2$20000${base64.b64encode(salt).decode()}${base64.b64encode(h).decode()}"
 
-avatar = ("data:image/svg+xml;utf8," +
-          "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'><rect width='80' height='80' rx='40' fill='%23e9dccd'/>"
-          "<text x='40' y='50' font-family='Heebo,Arial,sans-serif' font-size='30' text-anchor='middle' fill='%235b4a3b'>DC</text></svg>")
+avatar = "/demo/avatar.jpg"  # made with Codex for the demo
 out = []
 if "--owner" in sys.argv:
     # local test login, recorded in site/.dev.vars.example; never used on a real install
@@ -26,6 +24,7 @@ posts = [
     ("השקת התפריט החדש", "reel", "vertical", "demo-2", 11, 720, 1280, "הגיע הזמן לטעום משהו חדש. תפריט החורף שלנו נוחת ביום ראשון 🍝", "review"),
     ("מבצע סוף שבוע", "story", "vertical", "demo-3", 8, 720, 1280, "שישי-שבת: קפה + מאפה ב-25 ₪", "review"),
     ("סרטון היכרות ארוך", "long", "horizontal", "demo-4", 14, 1280, 720, "הכירו את הצוות שמאחורי הדלפק", "review"),
+    ("מאחורי הבר", "reel", "vertical", "demo-5", 9, 720, 1280, "ככה נראה אספרסו כפול כשאף אחד לא ממהר ☕️", "review"),
 ]
 for i, (title, kind, orient, guid, dur, w, h, cap, stage) in enumerate(posts, 1):
     out.append(f"INSERT INTO posts (client_id, title, kind, orientation, stage, caption, cover_url) VALUES "
