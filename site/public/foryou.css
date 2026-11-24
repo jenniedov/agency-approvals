@@ -189,6 +189,14 @@ body.forced-mute .card.attached.active:not(.squeeze) .soundhint { display: inlin
 .marq.run > span { padding-right: 36px; animation: fy-marq 10s linear infinite; }
 @keyframes fy-marq { to { transform: translateX(-100%); } }
 
+/* rail on the left (theme token --fy-rail-side: left, or the toggle in the "…" sheet): info moves to the right */
+[data-rail="left"] .rail { right: auto; left: calc(var(--safe-l) + 6px); }
+[data-rail="left"] .info { left: 72px; right: calc(var(--safe-r) + 12px); }
+[data-rail="left"] .who, [data-rail="left"] .audio { direction: rtl; }
+[data-rail="left"] .audio { align-self: flex-start; }
+[data-rail="left"] .cap { justify-content: flex-start; }
+[data-rail="left"] .cap.empty { align-self: flex-start; text-align: right; }
+
 /* ---------- right action rail ---------- */
 .rail {
   position: absolute; right: calc(var(--safe-r) + 6px); bottom: 18px; z-index: 4;
@@ -563,6 +571,9 @@ body.land .sheet-x { display: grid; }
   .stage { border-radius: 8px; }
   .rail { right: auto; left: calc(100% + 14px); bottom: 0; }
   .info { right: 16px; }
+  [data-rail="left"] { --col-shift: -32px; }
+  [data-rail="left"] .rail { left: auto; right: calc(100% + 14px); }
+  [data-rail="left"] .info { left: 16px; right: 16px; }
   .fy-top { left: 50%; right: auto; top: 16px; width: var(--col-w); padding: 12px 14px; transform: translateX(calc(-50% - var(--col-shift))); }
   .fy-tabs {
     left: auto; top: 0; right: 0; bottom: 0; width: 72px; height: auto;

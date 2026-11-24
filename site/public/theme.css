@@ -25,6 +25,7 @@
   --video-bg: #1b1413;       /* behind the video in For You */
   --on-video: #fbf3ea;       /* text and icons over the video */
   --video-scrim: linear-gradient(to top, rgba(27,18,16,.78), rgba(27,18,16,0) 48%);
+  --fy-rail-side: right;     /* For You buttons: right | left (each phone can flip it in the "…" sheet) */
 
   /* extras for this look */
   --font-latin-script: "Mrs Saint Delafield", "Snell Roundhand", cursive;      /* English script accents only */

@@ -42,9 +42,11 @@
   const cssEsc = (s) => (window.CSS && CSS.escape ? CSS.escape(String(s)) : String(s).replace(/"/g, '\\"'));
 
   const HEART = 'M12 20.4c-.4 0-9.5-5.3-9.5-11.3C2.5 6 4.8 3.6 7.6 3.6c1.9 0 3.5 1 4.4 2.6.9-1.6 2.5-2.6 4.4-2.6 2.8 0 5.1 2.4 5.1 5.5 0 6-9.1 11.3-9.5 11.3z';
+  const RING = 'M12 2.6a9.4 9.4 0 1 1 0 18.8a9.4 9.4 0 1 1 0-18.8z'; /* approve = a thin ring with a check (not a heart) */
   const ICON = {
-    approve: `<path class="hf" d="${HEART}"/><path class="hc" d="M8.5 11.4l2.4 2.4 4.6-4.7"/>`,
-    heartx: `<path class="hf" d="${HEART}"/><path class="hc" d="M9.6 9.3l4.8 4.8M14.4 9.3l-4.8 4.8"/>`,
+    approve: `<path class="hf" d="${RING}"/><path class="hc" d="M7.7 12.2l2.9 2.9 5.7-5.8"/>`,
+    heartx: `<path class="hf" d="${RING}"/><path class="hc" d="M9.3 9.3l5.4 5.4M14.7 9.3l-5.4 5.4"/>`,
+    side: '<rect x="3.5" y="4" width="17" height="16" rx="3"/><path d="M15.5 4v16"/>',
     comment: '<path d="M20.7 16.9A9.6 9.6 0 1 0 17 20.6L21.8 22z"/>',
     share: '<path d="M21.5 2.8L9.4 10"/><path d="M11.7 20.6L21.5 2.8H2.6l6.8 7.2z"/>',
     more: '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
@@ -78,6 +80,11 @@
   const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[n] || ''}</svg>`;
 
   /* ---------- state ---------- */
+  /* which side the action rail sits on: theme token --fy-rail-side (right | left), overridable per device from the "…" sheet */
+  const railSide = () => store.get('railSide', null) || (getComputedStyle(document.documentElement).getPropertyValue('--fy-rail-side').trim() === 'left' ? 'left' : 'right');
+  const setRail = (side) => { document.documentElement.dataset.rail = side; };
+  setRail(railSide());
+
   const S = {
     user: null, brand: null, groups: [], posts: new Map(), clients: new Map(), allClients: null, tracks: null, order: [],
     cards: [], active: null, speed: SPEEDS.includes(store.get('speed', 1)) ? store.get('speed', 1) : 1,
@@ -1485,6 +1492,7 @@
           cur !== 'pending' ? row('undo', 'החזרה להמתנה', () => setState(post, part, 'pending')) : null),
         h('div', { class: 'mo-group' },
           row('clean', 'מסך נקי', () => setClean(true)),
+          row('side', railSide() === 'left' ? 'הכפתורים בצד ימין' : 'הכפתורים בצד שמאל', () => { const n = railSide() === 'left' ? 'right' : 'left'; store.set('railSide', n); setRail(n); }),
           row('speed', 'מהירות קבועה', null, seg),
           row(P.el.muted ? 'vol' : 'mute', P.el.muted ? 'הפעלת שמע' : 'השתקה', () => setMuted(!P.el.muted))),
         isTouch ? null : h('p', { class: 'sec-hint center' }, 'במקלדת: חיצים למעבר, רווח לעצירה, M לשמע')),
