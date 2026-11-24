@@ -13,15 +13,12 @@
 </head>
 <body class="fy">
   <header class="fy-top" id="top">
-    <button class="fy-title" id="titleBtn" type="button" aria-label="מעבר ללקוח">
-      <h1>לאישור</h1>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 9.5l5.5 5.5 5.5-5.5" /></svg>
-    </button>
+    <h1 class="vh">לאישור</h1>
+    <div class="fy-chips" id="chips" role="group" aria-label="סינון לפי לקוח"></div>
     <span class="fy-count" id="count" aria-live="polite"></span>
     <span class="fy-speed" id="speedTag"></span>
-    <span class="fy-grow"></span>
     <button class="fy-sound" id="soundBtn" type="button" aria-label="השתקה"></button>
-    <button class="fy-chip" id="clientChip" type="button" aria-label="מעבר ללקוח"></button>
+    <span class="fy-mark" aria-hidden="true">for you<svg class="spark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1c.6 6.5 4.5 10.4 11 11-6.5.6-10.4 4.5-11 11-.6-6.5-4.5-10.4-11-11 6.5-.6 10.4-4.5 11-11Z"/></svg></span>
   </header>
 
   <main class="fy-feed" id="feed" aria-label="סרטונים לאישור"></main>

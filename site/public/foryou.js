@@ -349,7 +349,9 @@
     const f = d ? clamp(t / d, 0, 1) : 0;
     card._prog.fill.style.transform = 'scaleX(' + f + ')';
     card._prog.knob.style.left = (f * 100) + '%';
-    if (P.scrub) card._prog.time.textContent = fmt(t) + ' / ' + fmt(d);
+    const tt = fmt(t) + ' / ' + fmt(d);
+    if (card._prog.ptime.textContent !== tt) card._prog.ptime.textContent = tt;
+    if (P.scrub) card._prog.time.textContent = tt;
     if (S.sheet && S.sheet.onTick) S.sheet.onTick(t);
   }
 
@@ -359,8 +361,9 @@
     const knob = h('div', { class: 'prog-knob' });
     const time = h('div', { class: 'scrub-time', 'aria-hidden': 'true' });
     const track = h('div', { class: 'prog-track' }, fill, marks, knob);
-    const prog = h('div', { class: 'prog', role: 'slider', 'aria-label': 'מיקום בסרטון', tabindex: '-1' }, track);
-    card._prog = { fill, marks, knob, time, track };
+    const ptime = h('span', { class: 'prog-time', 'aria-hidden': 'true' });
+    const prog = h('div', { class: 'prog', role: 'slider', 'aria-label': 'מיקום בסרטון', tabindex: '-1' }, track, ptime);
+    card._prog = { fill, marks, knob, time, track, ptime };
     let wasPlaying = false;
     const seekAt = (e, fast) => {
       const r = track.getBoundingClientRect();
@@ -369,7 +372,7 @@
       const t = f * d;
       if (fast && typeof P.el.fastSeek === 'function') P.el.fastSeek(t); else P.el.currentTime = t;
       fill.style.transform = 'scaleX(' + f + ')'; knob.style.left = (f * 100) + '%';
-      time.textContent = fmt(t) + ' / ' + fmt(d);
+      time.textContent = ptime.textContent = fmt(t) + ' / ' + fmt(d);
     };
     prog.addEventListener('pointerdown', (e) => {
       if (P.card !== card) return;
@@ -663,6 +666,7 @@
       return [
         approveButton(post, 'video'),
         railButton('comments', 'comment', String(n), () => openComments(post), { aria: 'הערות (' + n + ')' }),
+        railButton('details', 'caption', 'כיתוב', () => openDetails(post), { aria: 'כיתוב וקאבר' }),
         railButton('share' + (shared ? ' on' : ''), 'share', shared ? 'נשלח' : 'שליחה', () => openShare(post)),
         railButton('more', 'more', '', () => openMore(post, 'video'), { aria: 'עוד' }),
         musicSquare(post),
@@ -891,34 +895,50 @@
 
   /* --- counts and the top bar --- */
   const countLeft = () => { let n = 0; S.posts.forEach((p) => { if (isPending(p)) n++; }); return n; };
-  function updateCounts() { renderEnd(); updateTop(); }
+  function updateCounts() { renderEnd(); updateTop(); renderChips(); }
+
+  /* client chips at the top: "הכול" or one client (filters the feed) */
+  function renderChips() {
+    const box = $('#chips'); if (!box) return;
+    const pend = (g) => g.posts.filter(isPending).length;
+    const all = S.groups.reduce((s, g) => s + pend(g), 0);
+    const chip = (id, label, n) => {
+      const on = String(S.filter ?? null) === String(id);
+      return h('button', { type: 'button', class: 'fy-chip' + (on ? ' on' : ''), 'aria-pressed': String(on), onclick: () => setFilter(id) },
+        h('span', { dir: 'auto' }, label), h('i', {}, String(n)));
+    };
+    const key = JSON.stringify([S.filter ?? null, all, S.groups.map((g) => [g.client.id, g.client.name, pend(g)])]);
+    if (box._key === key) return;
+    box._key = key;
+    box.replaceChildren(chip(null, 'הכול', all), ...S.groups.map((g) => chip(g.client.id, g.client.name || '', pend(g))));
+    const cur = $('.fy-chip.on', box); if (cur) cur.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  function setFilter(id) {
+    if (S.groups.length < 2) return;
+    S.filter = (id == null || String(S.filter) === String(id)) ? null : id;
+    render(); feed.scrollTop = 0;
+  }
 
   function updateTop() {
     const post = S.active && S.active._fy.post;
     const total = S.order.length;
     $('#count').textContent = post && total ? (S.order.indexOf(post) + 1) + '/' + total : (total ? '' : '');
-    const chip = $('#clientChip');
-    if (!post) { chip.hidden = true; return; }
-    chip.hidden = false;
-    const c = clientOf(post);
-    if (S.chipClient !== c.id) {
-      S.chipClient = c.id;
-      chip.replaceChildren(avatar(c, 30));
-      chip.setAttribute('aria-label', 'הלקוח: ' + (c.name || '') + ' · מעבר ללקוח');
-      chip.classList.remove('swap'); void chip.offsetWidth; chip.classList.add('swap');
-    }
   }
 
   /* ---------- feed render + active card ---------- */
   let io = null;
+  const visibleGroups = () => (S.filter == null ? S.groups : S.groups.filter((g) => String(g.client.id) === String(S.filter)));
   function render() {
+    if (io) io.disconnect();
+    detach(); S.active = null;
     feed.replaceChildren(); S.cards = []; S.order = [];
     if (!S.groups.length) { renderEmpty(); return; }
     S.groups.forEach((g) => {
       S.clients.set(g.client.id, g.client);
-      g.posts.forEach((p) => { S.posts.set(String(p.id), p); S.order.push(p); });
+      g.posts.forEach((p) => S.posts.set(String(p.id), p));
     });
-    S.groups.forEach((g) => {
+    visibleGroups().forEach((g) => g.posts.forEach((p) => S.order.push(p)));
+    visibleGroups().forEach((g) => {
       g.posts.forEach((p) => {
         const vc = videoCard(p, g); S.cards.push(vc); feed.append(vc);
         const mc = metaCard(p, g); S.cards.push(mc); feed.append(mc);
@@ -935,7 +955,6 @@
 
   function renderEmpty() {
     document.body.classList.add('is-empty');
-    $('#clientChip').hidden = true;
     feed.append(h('section', { class: 'card card-end empty' }, h('div', { class: 'end-in' },
       h('div', { class: 'calm-ic', html: icon('check') }),
       h('h2', {}, 'הכול מאושר'),
@@ -1317,6 +1336,47 @@
   }
 
   /* caption editor */
+  /* "the details": caption with a counter, cover options as thumbnails, approve caption / ask for a change */
+  function openDetails(post) {
+    const MAX = 2200;
+    const ta = h('textarea', { class: 'dt-cap no-drag', dir: 'rtl', rows: '4', maxlength: String(MAX), 'aria-label': 'הכיתוב' });
+    ta.value = post.caption || '';
+    const cnt = h('span', { class: 'dt-en', 'aria-hidden': 'true' });
+    const syncCnt = () => { cnt.textContent = ta.value.length + ' / ' + MAX; };
+    ta.addEventListener('input', syncCnt); syncCnt();
+    const opts = post.cover_options || [];
+    let covers = null;
+    if (opts.length) {
+      const pos = h('span', { class: 'dt-en', 'aria-hidden': 'true' });
+      const grid = h('div', { class: 'dt-covers', role: 'radiogroup', 'aria-label': 'בחירת קאבר' });
+      const paint = () => {
+        const ci = opts.findIndex((o) => o.chosen);
+        pos.textContent = (ci >= 0 ? ci + 1 : '–') + ' of ' + opts.length;
+        $$('.dt-cover', grid).forEach((b, k) => { const on = !!opts[k].chosen; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
+      };
+      opts.forEach((o, i) => grid.append(h('button', { type: 'button', role: 'radio', class: 'dt-cover', 'aria-label': 'אפשרות ' + (i + 1) + (o.note ? ': ' + o.note : ''),
+        onclick: () => { if (o.chosen) return; Promise.resolve(chooseCover(post, o)).then(paint); paint(); } },
+        h('img', { src: o.url, alt: '', loading: 'lazy', decoding: 'async' }),
+        h('span', { class: 'dt-n', 'aria-hidden': 'true' }, String(i + 1).padStart(2, '0')),
+        h('span', { class: 'dt-pick', 'aria-hidden': 'true', html: icon('check') }))));
+      paint();
+      covers = h('div', { class: 'dt-field' }, h('div', { class: 'dt-lbl' }, h('span', {}, 'בחירת קאבר'), pos), grid);
+    }
+    const ok = h('button', { type: 'button', class: 'dt-btn lac', onclick: () => {
+      closeSheet();
+      if (ta.value !== (post.caption || '')) saveCaption(post, ta.value); else approvePart(post, 'caption');
+    } }, post.caption_state === 'approved' ? 'הכיתוב מאושר' : 'לאשר כיתוב');
+    const ask = h('button', { type: 'button', class: 'dt-btn ghost', onclick: () => { closeSheet(); rejectPart(post, 'caption', true); } }, 'לבקש שינוי');
+    openSheet({
+      title: 'כיתוב וקאבר', hideTitle: true, cls: 'sheet-details',
+      body: h('div', { class: 'dt' },
+        h('div', { class: 'dt-ttl' }, h('h2', {}, 'כיתוב וקאבר'), h('span', { class: 'dt-script', 'aria-hidden': 'true' }, 'the details')),
+        h('div', { class: 'dt-field' }, h('div', { class: 'dt-lbl' }, h('span', {}, 'הכיתוב'), cnt), ta),
+        covers,
+        h('div', { class: 'dt-acts' }, ok, ask)),
+    });
+  }
+
   function openCaptionEdit(post) {
     const ta = h('textarea', { class: 'ct-in big', dir: 'rtl', rows: '7', 'aria-label': 'הכיתוב' });
     ta.value = post.caption || '';
@@ -1514,8 +1574,6 @@
       })),
     });
   }
-  $('#titleBtn').addEventListener('click', openClients);
-  $('#clientChip').addEventListener('click', openClients);
   $('#soundBtn').addEventListener('click', () => setMuted(!P.el.muted));
 
   function setClean(on) {

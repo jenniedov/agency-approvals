@@ -144,11 +144,11 @@
   /* ---------------- icons ---------------- */
   function icon(name) {
     var p = {
-      today: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/><path d="M10 20v-6h4v6"/>',
-      clients: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c.7-3.2 3-5 6-5s5.3 1.8 6 5"/><circle cx="17.5" cy="9" r="2.4"/><path d="M16.5 14c2.3.2 4 1.8 4.5 4.5"/>',
+      today: '<circle cx="12" cy="12" r="3.6"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6L18 18M18 6l-1.4 1.4M7.4 16.6L6 18"/>',
+      clients: '<circle cx="9" cy="9" r="3.2"/><path d="M3.5 19c.6-3.2 2.7-4.8 5.5-4.8s4.9 1.6 5.5 4.8M15.5 6.2a3 3 0 0 1 0 5.6M17.5 14.6c1.7.6 2.7 2 3 4.4"/>',
       foryou: '<rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="m10.5 9 4 3-4 3z"/>',
-      schedule: '<rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>',
-      queue: '<path d="M4 6h16M4 12h10M4 18h7"/><path d="m16 16 2 2 4-4"/>',
+      schedule: '<rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M8.5 3.5v3M15.5 3.5v3"/>',
+      queue: '<rect x="4" y="4.5" width="16" height="4" rx="2"/><rect x="4" y="10.5" width="16" height="4" rx="2"/><path d="M6 18.5h12"/>',
       settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
       copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
       eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
@@ -165,7 +165,7 @@
     { id: 'clients', href: '#/clients', label: 'לקוחות', short: 'לקוחות' },
     { id: 'foryou', href: '/foryou', label: 'לאישור', short: 'לאישור' },
     { id: 'schedule', href: '#/schedule', label: 'לוח פרסומים', short: 'לוח' },
-    { id: 'queue', href: '#/queue', label: 'התור של קלוד', short: 'התור' },
+    { id: 'queue', href: '#/queue', label: 'התור של קלוד', short: 'תור' },
     { id: 'settings', href: '#/settings', label: 'הגדרות', short: 'הגדרות' }
   ];
   var current = { nav: 'today', clientId: null };
@@ -331,12 +331,15 @@
         '<h1>' + hello + (name ? ', ' + esc(name) : '') + '</h1><p class="muted">' + sub + '</p></header>';
 
       html += n
-        ? '<a class="hero-card" href="/foryou"><div><div class="big">' + (n === 1 ? 'סרטון אחד מחכה לך' : n + ' סרטונים מחכים לך') + '</div>' +
-          '<div class="sub">לצפות, להעיר ולאשר ברצף, אחד אחרי השני</div></div><span class="go">להתחיל ' + icon('arrow').replace('<svg', '<svg width="18" height="18"') + '</span></a>'
+        ? '<a class="hero-card" href="/foryou"><div class="hero-row"><div><div class="big">' + (n === 1 ? 'סרטון אחד מחכה לך' : n + ' סרטונים מחכים לך') + '</div>' +
+          '<div class="sub">לצפות, להעיר ולאשר ברצף</div></div>' +
+          '<div class="hero-num" aria-hidden="true"><span class="n">' + (n < 10 ? '0' + n : n) + '</span><span class="fy">for you</span></div></div>' +
+          '<span class="go">להתחיל ' + icon('arrow').replace('<svg', '<svg width="18" height="18"') + '</span></a>'
         : '<div class="hero-card calm"><div><div class="big">אין סרטונים שמחכים לך</div><div class="sub">כשקלוד יסיים סרטון חדש הוא יופיע כאן, ותקבלי התראה בפעמון</div></div></div>';
 
       if (n) {
-        html += '<section class="section" aria-labelledby="h-wait"><div class="section-head"><h2 id="h-wait">מחכה לאישור שלך</h2></div><div class="thumbs">' +
+        html += '<section class="section" aria-labelledby="h-wait"><div class="section-head"><h2 id="h-wait">מחכה לאישור שלך</h2>' +
+          (changes ? '<span class="en-i" aria-label="' + n + ' מתוך ' + (n + changes) + '">' + n + ' of ' + (n + changes) + '</span>' : '') + '</div><div class="thumbs">' +
           waiting.map(function (w) {
             var p = w.p, th = safeUrl(thumbOf(p));
             var meta = p.version ? 'גרסה ' + esc(p.version.n) : '';

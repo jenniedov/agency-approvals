@@ -72,6 +72,8 @@
   function base() { return '/api/c/' + encodeURIComponent(token); }
 
   var ICON_CHECK = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m7.5 12.5 3 3 6-6.5"/></svg>';
+  var ICON_OK = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+  var SPARK = '<svg class="spark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1c.6 6.5 4.5 10.4 11 11-6.5.6-10.4 4.5-11 11-.6-6.5-4.5-10.4-11-11 6.5-.6 10.4-4.5 11-11Z"/></svg>';
   var ICON_LOCK = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>';
 
   var toastTimer;
@@ -95,15 +97,15 @@
     var prev = (p.comments || []).filter(function (c) { return c.author_kind === 'client' || !c.author_kind; });
     var id = esc(p.id);
     return '<article class="post" id="post-' + id + '" aria-labelledby="t-' + id + '">' +
-      (total > 1 ? '<div class="post-num">סרטון ' + (i + 1) + ' מתוך ' + total + '</div>' : '') +
-      '<div class="body" style="padding-bottom:12px"><h2 id="t-' + id + '" style="font-size:19px">' + esc(p.title) + '</h2></div>' +
       '<div class="player ' + orient + '">' +
+      (total > 1 ? '<span class="cnt" aria-label="סרטון ' + (i + 1) + ' מתוך ' + total + '">' + pad(i + 1) + ' <em>/ ' + pad(total) + '</em></span>' : '') +
       (srcs.length ? '<video controls playsinline preload="metadata"' + (poster ? ' poster="' + poster + '"' : '') + ' data-video aria-label="' + esc(p.title) + '">' +
         srcs.map(function (s) { return '<source src="' + s + '" type="video/mp4">'; }).join('') +
         'הדפדפן לא מצליח לנגן את הסרטון.</video>'
         : '<div class="no-video">הסרטון עוד מתעבד. אפשר לרענן את הדף בעוד כמה דקות.</div>') +
       '</div>' +
       '<div class="body">' +
+      '<div class="ttl"><h2 id="t-' + id + '">' + esc(p.title) + '</h2>' + (v.n ? '<p class="muted">גרסה ' + esc(v.n) + '</p>' : '') + '</div>' +
       '<div class="facts"><div class="fact"><span class="k">מתי זה עולה</span><span class="v">' + esc(when) + '</span></div>' +
       '<div class="fact"><span class="k">איפה</span><span class="v">' + esc(where(p)) + '</span></div>' +
       (v.duration ? '<div class="fact"><span class="k">אורך</span><span class="v ltr" style="text-align:right">' + fmtSec(v.duration) + '</span></div>' : '') + '</div>' +
@@ -113,9 +115,10 @@
       }).join('') + '</ul></div>' : '') +
       '<div data-state></div>' +
       '<div class="actions" data-actions>' +
-      '<button type="button" class="btn approve" data-approve="' + id + '">' + ICON_CHECK + 'מאושר, אפשר להעלות</button>' +
+      '<button type="button" class="btn approve" data-approve="' + id + '">' + ICON_OK + '<span>מאשרים</span></button>' +
+      '<button type="button" class="btn ghost" data-open-note="' + id + '" aria-expanded="false" aria-controls="f-' + id + '">יש לי הערה</button>' +
       '</div>' +
-      '<form class="note" data-note="' + id + '" novalidate>' +
+      '<form class="note" id="f-' + id + '" data-note="' + id + '" novalidate hidden>' +
       '<label for="n-' + id + '">רוצה לשנות משהו?</label>' +
       '<textarea id="n-' + id + '" name="body" rows="3" placeholder="אפשר לכתוב כאן בחופשיות, במילים שלך"></textarea>' +
       (srcs.length ? '<label class="check"><input type="checkbox" name="at"> <span>בשנייה שהסרטון עומד עליה עכשיו <span class="ltr" data-sec>(0:00)</span></span></label>' : '') +
@@ -132,10 +135,13 @@
     var pending = (data.posts || []).filter(function (p) { return p.client_state === 'pending'; });
     var approved = (data.posts || []).filter(function (p) { return p.client_state === 'approved'; });
     var av = safeUrl(c.avatar);
-    var html = '<header class="top"><div class="who">' + (av ? '<img src="' + av + '" alt="">' : '<span class="ini" aria-hidden="true">' + esc(String(c.name || '?').charAt(0)) + '</span>') +
-      '<span>' + esc(brand) + ' · ' + esc(c.name || '') + '</span></div>' +
-      '<h1>' + (pending.length === 0 ? 'אין כרגע משהו שמחכה לך' : pending.length === 1 ? 'סרטון חדש מחכה לאישור שלך' : pending.length + ' סרטונים מחכים לאישור שלך') + '</h1></header>';
-    html += '<div class="calm">' + ICON_LOCK + '<span>בלי הרשמה ובלי סיסמה. התשובה שלך מגיעה ישר לסוכנות.</span></div>';
+    var now = new Date();
+    var html = '<header class="top hero"><div class="bar"><span class="mark">' + SPARK + '<span>' + esc(brand) + '</span></span>' +
+      '<span class="eyebrow ltr">' + pad(now.getDate()) + '.' + pad(now.getMonth() + 1) + '</span></div>' +
+      '<div class="who">' + (av ? '<img src="' + av + '" alt="">' : '<span class="ini" aria-hidden="true">' + esc(String(c.name || '?').charAt(0)) + '</span>') + '<span class="eyebrow">לאישור שלך</span></div>' +
+      '<h1>שלום' + (c.name ? ' ' + esc(c.name) : '') + '</h1>' +
+      '<div class="lead"><p data-lead>' + (pending.length === 0 ? 'אין כרגע משהו שמחכה לך' : pending.length === 1 ? 'סרטון חדש מחכה לאישור שלך' : pending.length + ' סרטונים מחכים לאישור שלך') + '</p>' +
+      '<span class="script" aria-hidden="true">for you</span></div></header>';
     if (pending.length) {
       html += pending.map(function (p, i) { return postCard(p, i, pending.length); }).join('');
     } else {
@@ -149,6 +155,7 @@
           '<span class="tag-ok">אישרת</span></li>';
       }).join('') + '</ul></details>';
     }
+    html += '<div class="calm">' + ICON_LOCK + '<span>בלי הרשמה ובלי סיסמה. התשובה שלך מגיעה ישר לסוכנות.</span></div>';
     html += '<p class="foot">' + esc(brand) + '</p>';
     $app.innerHTML = html;
     bind();
@@ -162,20 +169,28 @@
     $app.querySelectorAll('[data-approve]').forEach(function (b) {
       b.addEventListener('click', function () {
         var id = b.getAttribute('data-approve'), card = b.closest('.post');
-        b.disabled = true; b.lastChild.textContent = 'שולחת…';
+        b.disabled = true; b.lastChild.textContent = 'שולחים…';
         api('POST', base() + '/posts/' + encodeURIComponent(id) + '/approve', {}).then(function () {
           card.querySelector('[data-actions]').hidden = true;
           card.querySelector('[data-note]').hidden = true;
+          card.classList.add('is-ok');
           card.querySelector('[data-state]').innerHTML = '<div class="done" role="status">' + ICON_CHECK + '<span>תודה! אישרת את הסרטון והסוכנות כבר יודעת. אין צורך לעשות שום דבר נוסף.</span></div>';
           var v = card.querySelector('video'); if (v) v.pause();
           toast('האישור נשלח');
           card.setAttribute('data-done', '1');
-          var left = $app.querySelectorAll('.post:not([data-done])').length, h = $app.querySelector('header h1');
+          var left = $app.querySelectorAll('.post:not([data-done])').length, h = $app.querySelector('[data-lead]');
           if (h) h.textContent = left === 0 ? 'אישרת הכל, תודה' : left === 1 ? 'עוד סרטון אחד מחכה לך' : 'עוד ' + left + ' סרטונים מחכים לך';
         }).catch(function (e) {
-          b.disabled = false; b.lastChild.textContent = 'מאושר, אפשר להעלות';
+          b.disabled = false; b.lastChild.textContent = 'מאשרים';
           card.querySelector('[data-state]').innerHTML = '<div class="err" role="alert">' + esc(errText(e)) + '</div>';
         });
+      });
+    });
+    $app.querySelectorAll('[data-open-note]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var f = b.closest('.post').querySelector('[data-note]'), open = f.hidden;
+        f.hidden = !open; b.setAttribute('aria-expanded', String(open));
+        if (open) f.querySelector('textarea').focus();
       });
     });
     $app.querySelectorAll('form[data-note]').forEach(function (f) {
