@@ -20,4 +20,4 @@ This folder is the agency's whole system: client knowledge, edits, and the appro
 3. Fix each one in the edit, `agent.py upload <post> <file> --note "<what changed>"`, then `agent.py done <comment> "<what I did>"`.
 4. New edit for a client: `agent.py post <client> "<title>"`, then upload. It shows up in For You for approval.
 
-Skills: `/add-client` (from an Instagram or TikTok link), `/upload-edit`, `/handle-comments`.
+Skills: `/add-client` (from an Instagram or TikTok link), `/upload-edit`, `/prepare-covers` (3 cover options, she picks), `/handle-comments`.

@@ -80,7 +80,7 @@
     bad_credentials: 'האימייל או הסיסמה לא נכונים', invalid_credentials: 'האימייל או הסיסמה לא נכונים',
     wrong_password: 'האימייל או הסיסמה לא נכונים', bad_login: 'האימייל או הסיסמה לא נכונים',
     login: 'צריך להתחבר מחדש', too_many_tries: 'יותר מדי ניסיונות. כדאי לחכות כמה דקות ולנסות שוב',
-    already_set_up: 'המערכת כבר הוגדרה. אפשר להתחבר', bad_owner: 'צריך שם, אימייל תקין וסיסמה של לפחות 8 תווים',
+    already_set_up: 'המערכת כבר הוגדרה. אפשר להתחבר', bad_owner: 'צריך שם, אימייל תקין וסיסמה של לפחות 8 תווים', latin_only: 'שם, אימייל וסיסמה באותיות באנגלית בלבד',
     bunny_key: 'המפתח של Bunny לא עבד. כדאי להעתיק אותו שוב, בלי רווחים', name: 'צריך לכתוב שם ללקוח',
     json_only: 'הבקשה לא נשלחה כמו שצריך. כדאי לרענן את הדף', empty: 'אי אפשר לשלוח הערה ריקה',
     unauthorized: 'צריך להתחבר מחדש', not_logged_in: 'צריך להתחבר מחדש',
@@ -776,8 +776,8 @@
     $solo.innerHTML = '<div class="solo-card"><div class="topbar-brand" style="visibility:visible"><span class="brand-dot" aria-hidden="true"></span><span>' + esc(brand || 'מערכת האישורים') + '</span></div>' +
       '<div class="head"><h1>כניסה</h1><p class="muted">מתחברים עם האימייל והסיסמה של הסוכנות.</p></div>' +
       '<form class="form" id="login-form" novalidate>' +
-      '<div class="field"><label for="li-email">אימייל</label><input class="input" id="li-email" name="email" type="email" dir="ltr" autocomplete="username" required></div>' +
-      '<div class="field"><label for="li-pass">סיסמה</label><input class="input" id="li-pass" name="password" type="password" dir="ltr" autocomplete="current-password" required></div>' +
+      '<div class="field"><label for="li-email">אימייל</label><input class="input" id="li-email" name="email" type="email" dir="ltr" lang="en" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" required></div>' +
+      '<div class="field"><label for="li-pass">סיסמה</label><input class="input" id="li-pass" name="password" type="password" dir="ltr" lang="en" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="current-password" required></div>' +
       '<div class="form-error" role="alert" hidden></div>' +
       '<button type="submit" class="btn big block">להיכנס</button></form></div>';
     var f = document.getElementById('login-form');
@@ -807,9 +807,9 @@
     if (st.step === 0) {
       body = '<p class="muted">כמה פרטים כדי לפתוח את החשבון. האימייל והסיסמה ישמשו אותך להתחבר.</p>' +
         '<div class="field"><label for="su-agency_name">שם הסוכנות</label><input class="input" id="su-agency_name" name="agency_name" value="' + v('agency_name') + '" autocomplete="organization" required></div>' +
-        '<div class="field"><label for="su-name">השם שלך</label><input class="input" id="su-name" name="name" value="' + v('name') + '" autocomplete="name" required></div>' +
-        '<div class="field"><label for="su-email">אימייל</label><input class="input" id="su-email" name="email" type="email" dir="ltr" value="' + v('email') + '" autocomplete="email" required></div>' +
-        '<div class="field"><label for="su-password">סיסמה</label><input class="input" id="su-password" name="password" type="password" dir="ltr" value="' + v('password') + '" autocomplete="new-password" minlength="8" required><span class="hint">לפחות 8 תווים</span></div>';
+        '<div class="field"><label for="su-name">השם שלך</label><input class="input" id="su-name" name="name" value="' + v('name') + '" dir="ltr" lang="en" autocomplete="name" autocapitalize="words" spellcheck="false" placeholder="Dana" required><span class="hint">באנגלית</span></div>' +
+        '<div class="field"><label for="su-email">אימייל</label><input class="input" id="su-email" name="email" type="email" dir="ltr" lang="en" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" value="' + v('email') + '" autocomplete="email" required></div>' +
+        '<div class="field"><label for="su-password">סיסמה</label><input class="input" id="su-password" name="password" type="password" dir="ltr" lang="en" autocapitalize="none" autocorrect="off" spellcheck="false" value="' + v('password') + '" autocomplete="new-password" minlength="8" required><span class="hint">לפחות 8 תווים</span></div>';
     } else if (st.step === 1) {
       body = '<p class="muted">הסרטונים נשמרים ומתנגנים מחשבון Bunny שלך. מדביקים מפתח אחד, והמערכת פותחת ספרייה לבד.</p>' +
         '<div class="choice" role="group" aria-label="איך מתחברים"><button type="button" data-action="bunny-mode" data-v="0" aria-pressed="' + !st.existing + '">חשבון חדש או ריק</button>' +
@@ -1009,7 +1009,7 @@
     var postOut = function (x) { var c = M.clients.filter(function (k) { return k.id === x.client_id; })[0]; x.client_name = c && c.name; return x; };
     if (p === '/api/session') return ok({ brand: M.brand, setup_needed: M.setup, user: M.user });
     if (p === '/api/setup') { M.setup = false; M.user = { id: 1, name: body.name, email: body.email, role: 'owner' }; M.brand = { name: body.agency_name }; return ok({ ok: true, user: M.user }); }
-    if (p === '/api/login') { if (body.password !== 'password1') return no('bad_credentials', 401); M.user = { id: 1, name: 'ג׳ני דוברו', email: body.email, role: 'owner' }; return ok({ ok: true, user: M.user }); }
+    if (p === '/api/login') { if (body.password !== 'password1') return no('bad_credentials', 401); M.user = { id: 1, name: 'Owner', email: body.email, role: 'owner' }; return ok({ ok: true, user: M.user }); }
     if (p === '/api/logout') { M.user = null; return ok({ ok: true }); }
     if (!M.user) return no('unauthorized', 401);
     if (p === '/api/overview') {
@@ -1058,9 +1058,9 @@
       mk('nona', 'פסטה טרייה', 'published', { scheduled_at: iso(now - 2 * D) }),
       mk('alma', 'ריל: מאפה הבוקר', 'published', { scheduled_at: iso(startOfDay(new Date()).getTime() - 1 * D + 12 * H) }),
       mk('alma', 'ריל: קפה קר, גרסה 2', 'editing', { video_state: 'changes', comments: [{ id: 1, post_id: 10, target: 'music', at_sec: null, body: 'המוזיקה חזקה מדי בהתחלה', author: 'קפה אלמה', author_kind: 'client', status: 'open', created_at: iso(now - 30 * 60000) }] }),
-      mk('shahar', 'ריל: בוקר במאפייה', 'scheduled', { scheduled_at: iso(startOfDay(new Date()).getTime() + 3 * D + 10 * H), comments: [{ id: 2, post_id: 11, target: 'caption', body: 'פחות סימני קריאה, זה לא נשמע כמוהם.', author: 'ג׳ני', author_kind: 'team', status: 'done', created_at: iso(now - D) }] })
+      mk('shahar', 'ריל: בוקר במאפייה', 'scheduled', { scheduled_at: iso(startOfDay(new Date()).getTime() + 3 * D + 10 * H), comments: [{ id: 2, post_id: 11, target: 'caption', body: 'פחות סימני קריאה, זה לא נשמע כמוהם.', author: 'Owner', author_kind: 'team', status: 'done', created_at: iso(now - D) }] })
     ];
-    posts[0].comments = [{ id: 3, post_id: 1, target: 'video', at_sec: 7, body: 'המעבר לצלחת מהיר מדי. לתת לה עוד שנייה.', author: 'ג׳ני', author_kind: 'team', status: 'open', created_at: iso(now - 2 * H) }];
+    posts[0].comments = [{ id: 3, post_id: 1, target: 'video', at_sec: 7, body: 'המעבר לצלחת מהיר מדי. לתת לה עוד שנייה.', author: 'Owner', author_kind: 'team', status: 'open', created_at: iso(now - 2 * H) }];
     var events = [
       { id: 1, kind: 'new_video', post_id: 1, client_id: 'nona', body: 'ריל: מנת השף של השבוע', created_at: iso(now - 20 * 60000), read_at: null },
       { id: 2, kind: 'client_comment', post_id: 10, client_id: 'alma', body: 'המוזיקה חזקה מדי בהתחלה', created_at: iso(now - 30 * 60000), read_at: null },
@@ -1068,7 +1068,7 @@
       { id: 4, kind: 'shared', post_id: 5, client_id: 'nona', body: 'ריל: היין החדש', created_at: iso(now - D), read_at: iso(now - D) }
     ];
     return {
-      setup: qs.has('setup'), user: qs.has('nouser') || qs.has('setup') ? null : { id: 1, name: 'ג׳ני דוברו', email: 'owner@example.com', role: 'owner' },
+      setup: qs.has('setup'), user: qs.has('nouser') || qs.has('setup') ? null : { id: 1, name: 'Owner', email: 'owner@example.com', role: 'owner' },
       brand: { name: 'סטודיו לדוגמה' }, clients: clients, posts: posts, events: events,
       machine: qs.has('offline') ? { name: 'mac', last_seen: iso(now - 5 * H) } : { name: 'mac', last_seen: iso(now - 2 * 60000) },
       settings: { agency_name: 'סטודיו לדוגמה', bunny_library_id: '12345', bunny_cdn_host: 'vz-demo.b-cdn.net', has_bunny_key: true, has_elevenlabs_key: false }

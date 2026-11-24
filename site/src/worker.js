@@ -31,9 +31,10 @@ async function expandPosts(env, settings, posts) {
   if (!posts.length) return [];
   const ids = posts.map((p) => p.id);
   const q = ids.map(() => '?').join(',');
-  const [versions, comments] = await Promise.all([
+  const [versions, comments, covers] = await Promise.all([
     all(env.DB, `SELECT * FROM versions WHERE post_id IN (${q}) ORDER BY n DESC`, ...ids),
     all(env.DB, `SELECT * FROM comments WHERE post_id IN (${q}) ORDER BY COALESCE(at_sec, 1e9), id`, ...ids),
+    all(env.DB, `SELECT id, post_id, token, note, chosen, created_at FROM cover_options WHERE post_id IN (${q}) ORDER BY id`, ...ids),
   ]);
   return posts.map((p) => {
     const vs = versions.filter((v) => v.post_id === p.id);
@@ -45,6 +46,7 @@ async function expandPosts(env, settings, posts) {
       platforms: p.platforms ? safeParse(p.platforms) : null,
       version: cur ? { ...cur, ...bunny.playback(settings, cur.bunny_guid, short) } : null,
       versions: vs.map((v) => ({ id: v.id, n: v.n, note: v.note, created_at: v.created_at })),
+      cover_options: covers.filter((o) => o.post_id === p.id).map((o) => ({ id: o.id, url: `/cover/${o.token}.jpg`, note: o.note, chosen: !!o.chosen, created_at: o.created_at })),
       comments: comments.filter((c) => c.post_id === p.id).map((c) => ({ ...c, drawing: c.drawing ? safeParse(c.drawing) : null })),
     };
   });
@@ -110,6 +112,14 @@ async function route(req, env) {
     return servePage(env, req, '/client.html');
   }
   if (p === '/foryou' || p === '/foryou/') return servePage(env, req, '/foryou.html');
+  if ((m = p.match(/^\/cover\/([\w-]{12,})\.jpg$/))) {
+    const o = await one(env.DB, 'SELECT image FROM cover_options WHERE token = ?', m[1]);
+    if (!o) return new Response('not found', { status: 404 });
+    if (!o.image.startsWith('data:')) return Response.redirect(new URL(o.image, req.url).toString(), 302);
+    const [head, b64] = o.image.split(',');
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    return new Response(bytes, { headers: { 'content-type': (head.match(/data:([^;]+)/) || [])[1] || 'image/jpeg', 'cache-control': 'public, max-age=31536000, immutable' } });
+  }
   if (!p.startsWith('/api/')) return env.ASSETS.fetch(req);
 
   // Cheap CSRF guard: browser writes must be JSON (a cross-site form cannot send that without a preflight).
@@ -172,6 +182,7 @@ async function route(req, env) {
     if (!env.SETUP_CODE || !safeEqual(String(b.setup_code || ''), env.SETUP_CODE)) return err('setup_code', 403);
     const email = String(b.email || '').trim(), name = String(b.name || '').trim(), pw = String(b.password || '');
     if (!email.includes('@') || !name || pw.length < 8) return err('bad_owner');
+    if (/[\u0590-\u05FF]/.test(name + email + pw)) return err('latin_only');
     // Bunny: an account key creates the library; or an existing library is given.
     if (b.bunny_account_key) {
       try {
@@ -280,14 +291,32 @@ async function route(req, env) {
     await settleStage(env, id);
     return json({ post: await postById(env, settings, id) });
   }
+  if ((m = p.match(/^\/api\/posts\/(\d+)\/cover\/choose$/)) && method === 'POST') {
+    const id = +m[1], b = await body();
+    const o = await one(env.DB, 'SELECT * FROM cover_options WHERE id = ? AND post_id = ?', +b.option_id, id);
+    if (!o) return err('not_found', 404);
+    await env.DB.batch([
+      env.DB.prepare('UPDATE cover_options SET chosen = (id = ?) WHERE post_id = ?').bind(o.id, id),
+      env.DB.prepare("UPDATE posts SET cover_url=?, cover_state='approved', updated_at=datetime('now') WHERE id=?").bind(`/cover/${o.token}.jpg`, id),
+    ]);
+    // best effort: the chosen cover also becomes the Bunny thumbnail
+    const v = await one(env.DB, 'SELECT v.bunny_guid FROM posts p JOIN versions v ON v.id = p.current_version_id WHERE p.id = ?', id);
+    if (v && settings.bunny_key_enc && o.image.startsWith('data:') && !v.bunny_guid.startsWith('demo-')) {
+      const bytes = Uint8Array.from(atob(o.image.split(',')[1]), (c) => c.charCodeAt(0));
+      await bunny.setThumbnail(env, settings, v.bunny_guid, bytes, 'image/jpeg').catch((e) => console.error('thumb', e));
+    }
+    await settleStage(env, id);
+    return json({ post: await postById(env, settings, id) });
+  }
   if ((m = p.match(/^\/api\/posts\/(\d+)\/comments$/)) && method === 'POST') {
     const id = +m[1], b = await body();
     const post = await one(env.DB, 'SELECT * FROM posts WHERE id = ?', id);
     if (!post) return err('not_found', 404);
     const text = String(b.body || '').trim().slice(0, 4000);
     if (!text) return err('empty');
-    const c = await one(env.DB, 'INSERT INTO comments (post_id, version_id, target, at_sec, body, drawing, author, author_kind) VALUES (?,?,?,?,?,?,?,?) RETURNING *',
-      id, post.current_version_id, ['video', 'caption', 'cover', 'music', 'general'].includes(b.target) ? b.target : 'video', numOrNull(b.at_sec), text, b.drawing ? JSON.stringify(b.drawing).slice(0, 200000) : null, actor, 'team');
+    const c = await one(env.DB, 'INSERT INTO comments (post_id, version_id, target, at_sec, body, drawing, author, author_kind, cover_option_id) VALUES (?,?,?,?,?,?,?,?,?) RETURNING *',
+      id, post.current_version_id, ['video', 'caption', 'cover', 'music', 'general'].includes(b.target) ? b.target : 'video', numOrNull(b.at_sec), text, b.drawing ? JSON.stringify(b.drawing).slice(0, 200000) : null, actor, 'team', b.cover_option_id ? +b.cover_option_id : null);
+    if (b.target === 'cover') { await env.DB.prepare("UPDATE posts SET cover_state='changes', updated_at=datetime('now') WHERE id=?").bind(id).run(); await settleStage(env, id); }
     return json({ comment: { ...c, drawing: b.drawing || null } });
   }
   if ((m = p.match(/^\/api\/comments\/(\d+)$/))) {
@@ -456,6 +485,17 @@ async function agentRoutes(req, env, settings, p, body) {
     await env.DB.prepare("UPDATE posts SET cover_url=?, cover_state='pending', updated_at=datetime('now') WHERE id=?").bind(coverUrl, id).run();
     await settleStage(env, id);
     return json({ cover_url: coverUrl });
+  }
+  if ((m = p.match(/^\/posts\/(\d+)\/cover-options$/)) && method === 'POST') {
+    const id = +m[1], b = await body();
+    if (!(await one(env.DB, 'SELECT id FROM posts WHERE id = ?', id))) return err('not_found', 404);
+    const img = String(b.image || '');
+    if (!/^data:image\/(jpeg|png|webp);base64,/.test(img) || img.length > 1_500_000) return err('image');
+    const o = await one(env.DB, 'INSERT INTO cover_options (post_id, token, image, note) VALUES (?,?,?,?) RETURNING id, token, note', id, randomToken(16), img, b.note ? String(b.note).slice(0, 300) : null);
+    await env.DB.prepare("UPDATE posts SET cover_state='pending', updated_at=datetime('now') WHERE id=?").bind(id).run();
+    await settleStage(env, id);
+    if (b.notify !== false) await addEvent(env, 'new_cover', { post_id: id, actor: 'claude', body: b.note || null });
+    return json({ option: { id: o.id, url: `/cover/${o.token}.jpg`, note: o.note } });
   }
   if ((m = p.match(/^\/comments\/(\d+)\/done$/)) && method === 'POST') {
     const b = await body();

@@ -11,11 +11,12 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
   agent.py post <client_id> "<title>" [--kind reel|story|short|long|post] [--caption "..."]
   agent.py upload <post_id> <video file> [--note "what changed"]     new version → appears in For You
   agent.py caption <post_id> "<text>"
+  agent.py cover-options <post_id> <img> [<img> …] [--note "..."]   cover options she picks from (make them with make_covers.py)
   agent.py cover <post_id> <image file>   |   agent.py cover-time <post_id> <seconds>
   agent.py done <comment_id> ["what I did"]
   agent.py secrets                        ElevenLabs key for transcription (kept in memory, never printed)
 """
-import json, os, subprocess, sys, time, urllib.request, urllib.error
+import base64, json, os, subprocess, sys, tempfile, time, urllib.request, urllib.error
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONF = os.path.join(ROOT, ".secrets", "site.json")
@@ -85,6 +86,16 @@ def upload(post_id, path, note=None):
     print(json.dumps(r, ensure_ascii=False))
 
 
+def data_url(path):
+    """JPEG data URL under ~1 MB; big images are shrunk with sips (Mac) first."""
+    if os.path.getsize(path) > 900_000 or not path.lower().endswith((".jpg", ".jpeg")):
+        tmp = os.path.join(tempfile.mkdtemp(), "c.jpg")
+        subprocess.run(["sips", "-Z", "1440", "-s", "format", "jpeg", "-s", "formatOptions", "80", path, "--out", tmp],
+                       check=True, capture_output=True)
+        path = tmp
+    return "data:image/jpeg;base64," + base64.b64encode(open(path, "rb").read()).decode()
+
+
 def opt(args, name, default=None):
     if name in args:
         i = args.index(name)
@@ -120,6 +131,11 @@ def main(a):
     elif cmd == "cover":
         ct = "image/png" if a[1].lower().endswith(".png") else "image/jpeg"
         out = call("POST", f"/posts/{int(a[0])}/cover", raw=open(a[1], "rb").read(), ctype=ct)
+    elif cmd == "cover-options":
+        note = opt(a, "--note")
+        out = [call("POST", f"/posts/{int(a[0])}/cover-options",
+                    {"image": data_url(f), "note": note or os.path.basename(f), "notify": i == len(a) - 2})
+               for i, f in enumerate(a[1:])]
     elif cmd == "cover-time":
         out = call("PATCH", f"/posts/{int(a[0])}", {"cover_time": float(a[1])})
     elif cmd == "done":

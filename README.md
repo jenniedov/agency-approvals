@@ -11,7 +11,7 @@ Folder layout (the agency folder is the repo):
 
 ```
 CLAUDE.md                 how Claude works in this agency
-.claude/skills/           add-client, upload-edit, handle-comments
+.claude/skills/           add-client, upload-edit, prepare-covers, handle-comments
 clients/<client>/         CLAUDE.md (who they are, tone), style/, edits/<date>-<name>/, log.md
 site/                     the Worker, screens, migrations, scripts (agent.py, install.sh)
 media/  .secrets/         stay on the computer, never in git

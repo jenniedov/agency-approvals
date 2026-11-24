@@ -15,6 +15,8 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 - `GET /api/feed?stage=review&client=<id>` → `{groups: [{client: Client, posts: [Post]}]}`. Groups keep client order, posts newest first inside a group. Default stage = review.
 - `GET /api/posts?client=<id>` → `{posts: [Post]}` (all stages, for the board) · `GET /api/posts/<id>` → `{post: Post}`
 - `PATCH /api/posts/<id>` `{title?, caption?, music?, scheduled_at?, stage?}`
+- `POST /api/posts/<id>/cover/choose` `{option_id}` → `{post}`; that option becomes `cover_url`, `cover_state` approved, and (real videos with a Bunny key) the Bunny thumbnail
+- `POST /api/posts/<id>/comments` also takes `cover_option_id` with `target: "cover"` = "change the text on this option"; sets `cover_state` to changes
 - `POST /api/posts/<id>/state` `{part: "video"|"caption"|"cover", state: "approved"|"changes"|"pending"}` → `{post}`. All three approved ⇒ stage `approved`. Any `changes` ⇒ stage back to `editing`.
 - `POST /api/posts/<id>/comments` `{target, at_sec?, body, drawing?}` → `{comment}`
 - `PATCH /api/comments/<id>` `{body?, at_sec?, drawing?, status?}` · `DELETE /api/comments/<id>`
@@ -38,6 +40,8 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 - `GET /api/agent/bunny/video/<guid>` → Bunny status (`status` 4 = ready, `length`, `width`, `height`)
 - `POST /api/agent/posts/<id>/versions` `{bunny_guid, duration?, width?, height?, note?}` → `{version}`; post goes to `review`, video/cover states reset to pending, event `new_video`
 - `PATCH /api/agent/posts/<id>` `{caption?, title?, music?, cover_time?}` (`cover_time` seconds = Bunny takes the frame as the thumbnail)
+- `POST /api/agent/posts/<id>/cover-options` `{image: "data:image/jpeg;base64,…" (≤1.5 MB), note?, notify?}` → `{option: {id, url, note}}`; cover_state back to pending, event `new_cover` unless `notify: false`
+- `GET /cover/<token>.jpg` (public, unguessable) serves an option's image
 - `POST /api/agent/posts/<id>/cover` body = image bytes (`content-type: image/jpeg|png`) → Bunny thumbnail, `cover_url` updated, cover_state pending
 - `POST /api/agent/comments/<id>/done` `{note?}`
 - `GET /api/agent/secrets` → `{elevenlabs_key}` (for transcription on the Mac)
@@ -48,6 +52,7 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 Client  {id, name, handle, profile_url, avatar, bio, color, share_url, manager_id}
 Post    {id, client_id, client_name, title, kind, orientation, stage,
          video_state, caption, caption_state, cover_url, cover_state,
+         cover_options: [{id, url, note, chosen}],
          music, scheduled_at, client_state, created_at, updated_at,
          version: {id, n, bunny_guid, duration, width, height, note,
                    mp4: [url 720, url 480, url 360], hls, thumb, embed} | null,
