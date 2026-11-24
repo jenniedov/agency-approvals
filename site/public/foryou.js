@@ -220,13 +220,14 @@
     v.muted = S.muted;
     v.addEventListener('error', onVideoError);
     v.addEventListener('volumechange', () => { if (!v.muted) S.forcedMute = false; syncMute(); });
-    v.addEventListener('playing', () => P.card && P.card.classList.remove('buffering', 'paused', 'err'));
-    v.addEventListener('play', () => P.card && P.card.classList.remove('paused'));
-    v.addEventListener('pause', () => P.card && !P.scrub && P.card.classList.add('paused'));
-    v.addEventListener('waiting', () => P.card && P.card.classList.add('buffering'));
-    v.addEventListener('canplay', () => P.card && P.card.classList.remove('buffering'));
-    v.addEventListener('loadeddata', () => P.card && P.card.classList.add('ready'));
-    v.addEventListener('loadedmetadata', () => { if (P.card) { drawInk(P.card); renderMarks(P.post); } });
+    const mine = () => v === P.el;
+    v.addEventListener('playing', () => P.card && mine() && P.card.classList.remove('buffering', 'paused', 'err'));
+    v.addEventListener('play', () => P.card && mine() && P.card.classList.remove('paused'));
+    v.addEventListener('pause', () => P.card && mine() && !P.scrub && P.card.classList.add('paused'));
+    v.addEventListener('waiting', () => P.card && mine() && P.card.classList.add('buffering'));
+    v.addEventListener('canplay', () => P.card && mine() && P.card.classList.remove('buffering'));
+    v.addEventListener('loadeddata', () => P.card && mine() && P.card.classList.add('ready'));
+    v.addEventListener('loadedmetadata', () => { if (P.card && mine()) { drawInk(P.card); renderMarks(P.post); } });
     return v;
   }
 
@@ -247,17 +248,73 @@
     card.classList.remove('err', 'paused', 'ready');
     card._userPaused = false;
     const vbox = $('.vbox', card);
+    const spare = P.srcs.length ? takeSpare(P.srcs[0]) : null;
+    if (spare) P.el = spare; // already loading or loaded: swap it in instead of loading from scratch
     vbox.insertBefore(P.el, $('.ink', vbox));
     if (!P.srcs.length) { showVideoError(card, 'אין עדיין קובץ וידאו'); return; }
     P.el.muted = S.muted || S.forcedMute;
     syncMute();
     const t = post._t || 0;
-    if (t > 0.5) P.el.addEventListener('loadedmetadata', () => { try { P.el.currentTime = t; } catch { /* ignore */ } }, { once: true });
-    P.el.src = P.srcs[0];
+    const warm = P.el.getAttribute('src') === P.srcs[0];
+    const wasReady = warm && P.el.readyState >= 2;
+    if (t > 0.5) { if (warm && P.el.readyState >= 1) { try { P.el.currentTime = t; } catch { /* ignore */ } } else P.el.addEventListener('loadedmetadata', () => { try { P.el.currentTime = t; } catch { /* ignore */ } }, { once: true }); }
+    if (warm && !(t > 0.5) && P.el.currentTime > 0.05) { try { P.el.currentTime = 0; } catch { /* ignore */ } }
+    if (!warm) P.el.src = P.srcs[0];
+    else if (wasReady) { card.classList.add('ready'); card.classList.remove('buffering'); }
     P.el.defaultPlaybackRate = S.speed;
     P.el.playbackRate = S.speed;
     play();
     startRaf();
+  }
+
+  /* ---- preloading: hidden, muted, playsinline <video> elements for the next posts (iPhone Safari ignores preload on a src-less element) ---- */
+  const SPARE = { map: new Map(), box: null, imgs: new Set() };
+  const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function spareBox() {
+    if (!SPARE.box) { SPARE.box = h('div', { 'aria-hidden': 'true', style: 'position:fixed;left:0;bottom:0;width:2px;height:2px;overflow:hidden;opacity:0;pointer-events:none;z-index:-1' }); document.body.append(SPARE.box); }
+    return SPARE.box;
+  }
+  function takeSpare(src) {
+    const v = SPARE.map.get(src);
+    if (!v) return null;
+    SPARE.map.delete(src);
+    v.preload = 'auto';
+    return v;
+  }
+  function makeSpare(src, level) {
+    const v = makeVideo();
+    v.muted = true; v.preload = level; v.src = src;
+    spareBox().append(v);
+    try { v.load(); } catch { /* ignore */ }
+    if (IOS && level === 'auto') { // iOS often stalls at metadata: a silent play/pause nudges it to buffer the first seconds
+      v.addEventListener('loadeddata', () => { if (SPARE.map.get(src) !== v || v.readyState >= 4) return; v.play().then(() => { if (SPARE.map.get(src) === v) { v.pause(); try { v.currentTime = 0; } catch { /* ignore */ } } }).catch(() => {}); }, { once: true });
+    }
+    return v;
+  }
+  function warmImage(url) { if (!url || SPARE.imgs.has(url)) return; SPARE.imgs.add(url); const i = new Image(); i.decoding = 'async'; i.src = url; }
+  function preloadAhead(card) {
+    const i = S.cards.indexOf(card);
+    const want = [];
+    for (let k = i + 1; k < S.cards.length && want.length < 2; k++) { const c = S.cards[k]; if (c._fy.type === 'video' && c._fy.post) want.push(c._fy.post); }
+    const keep = new Set();
+    want.forEach((post, n) => {
+      const src = sourcesFor(post)[0];
+      if (!src) return;
+      keep.add(src);
+      const cl = post.client_id != null && S.clients && S.clients.get && S.clients.get(post.client_id);
+      if (cl && cl.avatar) warmImage(cl.avatar);
+      warmImage(post.cover_url || (post.version && post.version.thumb));
+      if (!SPARE.map.has(src)) SPARE.map.set(src, makeSpare(src, n === 0 ? 'auto' : 'metadata'));
+    });
+    for (const [src, v] of [...SPARE.map]) if (!keep.has(src)) { SPARE.map.delete(src); v.removeAttribute('src'); try { v.load(); } catch { /* ignore */ } v.remove(); }
+  }
+  function clearSpares() { for (const [, v] of SPARE.map) { v.removeAttribute('src'); try { v.load(); } catch { /* ignore */ } v.remove(); } SPARE.map.clear(); }
+  function preloadWhenReady(card) {
+    const run = () => { if (S.active === card) preloadAhead(card); };
+    if (!P.card || P.el.readyState >= 3) { run(); return; }
+    const el = P.el;
+    el.addEventListener('canplay', run, { once: true });
+    setTimeout(run, 4000);
   }
 
   function detach() {
@@ -979,6 +1036,7 @@
   function openStories(clientId, postId, gesture) {
     if (!window.FYStories || !S.stories.length) return false;
     const back = P.card;
+    clearSpares();
     detach();
     if (back) back._userPaused = false;
     const ok = FYStories.open({
@@ -988,7 +1046,7 @@
         renderRings();
         if (!S.groups.length) { feed.replaceChildren(); renderEmpty(); }
         syncMute();
-        if (S.active && S.active._fy.type === 'video') attach(S.active);
+        if (S.active && S.active._fy.type === 'video') { attach(S.active); preloadWhenReady(S.active); }
         if (qs.has('stories')) { const u = new URL(location.href); u.searchParams.delete('stories'); history.replaceState(null, '', u); }
       },
     });
@@ -1003,6 +1061,7 @@
     const f = card._fy;
     document.body.classList.toggle('on-end', f.type === 'end');
     if (f.type === 'video') attach(card); else detach();
+    if (f.type === 'video') preloadWhenReady(card);
     if (f.post) fitCaption(card);
     updateTop();
     const nxt = S.cards[S.cards.indexOf(card) + 2];

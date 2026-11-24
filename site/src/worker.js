@@ -449,7 +449,9 @@ async function serveMedia(env, req, guid) {
   const head = await env.MEDIA.head(key);
   if (!head) return new Response('not found', { status: 404 });
   const size = head.size;
-  const base = { 'content-type': (head.httpMetadata && head.httpMetadata.contentType) || 'video/mp4', 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=3600', etag: head.httpEtag };
+  const base = { 'content-type': (head.httpMetadata && head.httpMetadata.contentType) || 'video/mp4', 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=604800', etag: head.httpEtag };
+  const inm = req.headers.get('if-none-match');
+  if (inm && head.httpEtag && inm.split(',').some((x) => x.trim() === head.httpEtag)) return new Response(null, { status: 304, headers: base });
   const rh = req.headers.get('range');
   let range = null;
   const rm = rh && rh.match(/^bytes=(\d*)-(\d*)$/);

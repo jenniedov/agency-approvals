@@ -98,34 +98,39 @@
     vid.setAttribute('playsinline', '');
     vid.preload = 'auto';
     vid.muted = !!opts.muted || !opts.gesture;
-    media.append(poster, vid, h('div', { class: 'st-shade' }), tap, texts, head, center, verr, trash);
+    const sbox = h('div', { 'aria-hidden': 'true', style: 'position:absolute;left:0;bottom:0;width:2px;height:2px;overflow:hidden;opacity:0;pointer-events:none' });
+    media.append(sbox, poster, vid, h('div', { class: 'st-shade' }), tap, texts, head, center, verr, trash);
     frame.append(media, scrub, bar, end, toastEl);
     root.append(frame, navPrev, navNext);
     document.body.append(root);
     document.body.classList.add('st-open');
 
-    V = { opts, list, i, root, frame, media, texts, trash, scrub, range, scrubT, vid, poster, tap, bars, head, center, verr, input, approveBtn, sendBtn, bar, toastEl, end,
-      raf: 0, held: false, typing: false, editing: false, scrubbing: false, ro: null, lastStyle: 'white-box', saveT: {}, userPaused: false, ended: false, srcIdx: 0, srcs: [], approvedNow: new Set(), notedNow: new Set(), onKey: null, onVid: {} };
+    V = { sbox, opts, list, i, root, frame, media, texts, trash, scrub, range, scrubT, vid, poster, tap, bars, head, center, verr, input, approveBtn, sendBtn, bar, toastEl, end,
+      pool: new Map(), imgs: new Set(), raf: 0, held: false, typing: false, editing: false, scrubbing: false, ro: null, lastStyle: 'white-box', saveT: {}, userPaused: false, ended: false, srcIdx: 0, srcs: [], approvedNow: new Set(), notedNow: new Set(), onKey: null, onVid: {} };
 
-    /* video events */
-    const on = (ev, fn) => { vid.addEventListener(ev, fn); V.onVid[ev] = fn; };
-    on('ended', () => { if (V && !V.ended) next(); });
-    on('playing', () => { root.classList.remove('buffering'); verr.replaceChildren(); });
-    on('waiting', () => root.classList.add('buffering'));
-    on('loadeddata', () => { root.classList.add('ready'); root.classList.remove('buffering'); });
-    on('error', () => {
-      if (!V || !vid.error) return;
-      V.srcIdx++;
-      if (V.srcIdx < V.srcs.length) { vid.src = V.srcs[V.srcIdx]; play(); return; }
-      root.classList.remove('buffering');
-      verr.replaceChildren(h('span', {}, 'הסרטון לא נטען'), h('button', { type: 'button', class: 'st-pill', onclick: (e) => { e.stopPropagation(); show(V.i); } }, 'לנסות שוב'));
-    });
+    /* video events (bound to whichever element is current: a preloaded one can be swapped in) */
+    V.bindVid = (v) => {
+      const on = (ev, fn) => { v.addEventListener(ev, fn); V.onVid[ev] = fn; };
+      on('ended', () => { if (V && !V.ended && V.vid === v) next(); });
+      on('playing', () => { root.classList.remove('buffering'); verr.replaceChildren(); });
+      on('waiting', () => root.classList.add('buffering'));
+      on('loadeddata', () => { root.classList.add('ready'); root.classList.remove('buffering'); });
+      on('error', () => {
+        if (!V || !v.error || V.vid !== v) return;
+        V.srcIdx++;
+        if (V.srcIdx < V.srcs.length) { v.src = V.srcs[V.srcIdx]; play(); return; }
+        root.classList.remove('buffering');
+        verr.replaceChildren(h('span', {}, 'הסרטון לא נטען'), h('button', { type: 'button', class: 'st-pill', onclick: (e) => { e.stopPropagation(); show(V.i); } }, 'לנסות שוב'));
+      });
+    };
+    V.unbindVid = (v) => { for (const [ev, fn] of Object.entries(V.onVid)) v.removeEventListener(ev, fn); V.onVid = {}; };
+    V.bindVid(vid);
 
     const setU = () => media.style.setProperty('--u', (media.clientWidth / 1080) + 'px');
     setU();
     if (window.ResizeObserver) { V.ro = new ResizeObserver(setU); V.ro.observe(media); }
     bindTap();
-    range.addEventListener('input', () => { vid.currentTime = +range.value; paintScrub(); });
+    range.addEventListener('input', () => { V.vid.currentTime = +range.value; paintScrub(); });
     const scrubOn = () => { V.scrubbing = true; };
     const scrubOff = () => setTimeout(() => { if (V) V.scrubbing = false; }, 400);
     range.addEventListener('pointerdown', scrubOn); range.addEventListener('touchstart', scrubOn, { passive: true });
@@ -146,10 +151,10 @@
       else if (e.key === 'ArrowRight') { e.preventDefault(); next(); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); }
       else if (e.key === ' ' && !(e.target.closest && e.target.closest('button'))) { e.preventDefault(); togglePause(); }
-      else if (e.key === 'm' || e.key === 'M') setMuted(!vid.muted);
+      else if (e.key === 'm' || e.key === 'M') setMuted(!V.vid.muted);
     };
     document.addEventListener('keydown', V.onKey, true);
-    V.onVis = () => { if (!V) return; if (document.hidden) vid.pause(); else resume(); };
+    V.onVis = () => { if (!V) return; if (document.hidden) V.vid.pause(); else resume(); };
     document.addEventListener('visibilitychange', V.onVis);
 
     show(i);
@@ -179,11 +184,62 @@
       V.verr.replaceChildren(h('span', {}, 'אין עדיין קובץ וידאו'));
       V.vid.removeAttribute('src');
     } else {
-      V.vid.src = V.srcs[0];
-      V.vid.currentTime = 0;
+      const sp = V.pool.get(V.srcs[0]);
+      if (sp) { V.pool.delete(V.srcs[0]); adopt(sp); }
+      if (V.vid.getAttribute('src') === V.srcs[0]) {
+        const warm = V.vid.readyState >= 2;
+        if (V.vid.currentTime > 0.05) { try { V.vid.currentTime = 0; } catch { /* ignore */ } }
+        if (warm) { V.root.classList.add('ready'); V.root.classList.remove('buffering'); }
+      } else { V.vid.src = V.srcs[0]; V.vid.currentTime = 0; }
       play();
     }
     startRaf();
+    preloadSoon();
+  }
+
+  /* ---- preloading: the next and the previous story wait in hidden, muted, playsinline <video> elements ---- */
+  const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function mkVid() {
+    const v = document.createElement('video');
+    v.className = 'st-vid'; v.loop = false; v.playsInline = true; v.muted = true; v.preload = 'auto';
+    v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', '');
+    return v;
+  }
+  function adopt(nv) { // swap the playing element for a preloaded one
+    const old = V.vid;
+    V.unbindVid(old);
+    nv.muted = old.muted; nv.className = 'st-vid';
+    old.pause();
+    old.replaceWith(nv);
+    if (old !== V.opts.video) { old.removeAttribute('src'); try { old.load(); } catch { /* ignore */ } } else { old.removeAttribute('src'); try { old.load(); } catch { /* ignore */ } }
+    V.vid = nv;
+    V.bindVid(nv);
+  }
+  function warmImg(u) { if (!u || V.imgs.has(u)) return; V.imgs.add(u); const i = new Image(); i.decoding = 'async'; i.src = u; }
+  function preloadNow() {
+    if (!V) return;
+    const want = [V.i + 1, V.i - 1, V.i + 2].filter((n) => n >= 0 && n < V.list.length);
+    const keep = new Set();
+    want.forEach((n, k) => {
+      const { set, post } = V.list[n];
+      const ver = post.version || {};
+      warmImg(ver.thumb || post.cover_url); warmImg(set.client && set.client.avatar);
+      const src = (Array.isArray(ver.mp4) ? ver.mp4 : []).filter(Boolean)[0];
+      if (!src || k > 1) return; // two videos (next, previous); the one after only gets its poster
+      keep.add(src);
+      if (V.pool.has(src)) return;
+      const v = mkVid(); v.src = src;
+      V.pool.set(src, v);
+      V.sbox.append(v);
+      try { v.load(); } catch { /* ignore */ }
+      if (IOS) v.addEventListener('loadeddata', () => { if (!V || V.pool.get(src) !== v || v.readyState >= 4) return; v.play().then(() => { if (V && V.pool.get(src) === v) { v.pause(); try { v.currentTime = 0; } catch { /* ignore */ } } }).catch(() => {}); }, { once: true });
+    });
+    for (const [src, v] of [...V.pool]) if (!keep.has(src)) { V.pool.delete(src); v.removeAttribute('src'); try { v.load(); } catch { /* ignore */ } v.remove(); }
+  }
+  function preloadSoon() { // after the current video can play, so the two never fight for bandwidth
+    const v = V.vid, at = V.i;
+    const run = () => { if (V && V.i === at) preloadNow(); };
+    if (v.readyState >= 3) run(); else { v.addEventListener('canplay', run, { once: true }); setTimeout(run, 4000); }
   }
 
   function paintHead() {
@@ -594,7 +650,9 @@
     if (v.ro) v.ro.disconnect();
     document.removeEventListener('keydown', v.onKey, true);
     document.removeEventListener('visibilitychange', v.onVis);
-    for (const [ev, fn] of Object.entries(v.onVid)) v.vid.removeEventListener(ev, fn);
+    v.unbindVid(v.vid);
+    for (const [, pv] of v.pool) { pv.removeAttribute('src'); try { pv.load(); } catch { /* ignore */ } }
+    v.pool.clear();
     v.vid.pause();
     v.vid.removeAttribute('src');
     try { v.vid.load(); } catch { /* frees the decoder */ }
