@@ -165,8 +165,18 @@
   function transcribeItem(it) {
     it.tstate = 'pending'; paint();
     api('POST', '/api/jobs/' + job.id + '/files/' + it.fileId + '/transcribe').then(function (r) {
-      it.tstate = 'done'; it.transcript = r.transcript || ''; paint();
+      it.tstate = 'done'; it.transcript = r.transcript || ''; insertTranscript(it); paint();
     }, function (e) { it.tstate = e.code === 'no_key' ? 'later' : 'failed'; paint(); });
+  }
+  // her words go straight into the text box (appended, once per recording), so she can read and fix them
+  function insertTranscript(it) {
+    if (it.inserted || !it.transcript) return;
+    it.inserted = true;
+    var ta = document.getElementById('jb-text');
+    var cur = ta ? ta.value : (localStorage.getItem('job_text') || '');
+    var next = cur.replace(/\s+$/, '') + (cur.trim() ? '\n' : '') + it.transcript.trim();
+    if (ta) { ta.value = next; ta.scrollTop = ta.scrollHeight; }
+    try { localStorage.setItem('job_text', next); } catch (_) {}
   }
 
   function retryItem(it) {
@@ -184,6 +194,7 @@
     paint(); releaseWake();
   }
 
+  function voicePending() { return items.filter(function (it) { return it.role === 'voice' && it.state !== 'failed' && it.state !== 'removed' && (it.state !== 'ready' || it.tstate === 'pending'); }); }
   function busy() { return items.filter(function (it) { return it.state === 'starting' || it.state === 'uploading' || it.state === 'finishing'; }); }
   function totals() {
     var size = 0, done = 0;
@@ -335,7 +346,7 @@
       r.job.files.forEach(function (f) {
         if (f.state !== 'ready') { api('DELETE', '/api/jobs/' + job.id + '/files/' + f.id).catch(function () {}); return; }
         items.push({ key: ++seq, file: { name: f.name, size: f.size, type: f.content_type }, role: f.role, fileId: f.id, state: 'ready', pending: [], etags: {}, loaded: {}, done: f.size,
-          url: f.url, transcript: f.transcript, tstate: f.transcript_state === 'done' ? 'done' : f.role === 'voice' ? 'later' : null });
+          url: f.url, transcript: f.transcript, tstate: f.transcript_state === 'done' ? 'done' : f.role === 'voice' ? 'later' : null, inserted: true });
       });
       paint();
     }).catch(function () { try { localStorage.removeItem('job_draft'); } catch (_) {} });
@@ -384,17 +395,14 @@
       '<span class="jb-tile-meta">' + st + '<span class="jb-size ltr">' + mb(it.file.size) + '</span></span>' +
       (sent ? '' : '<button type="button" class="jb-x" data-jb="remove" data-key="' + it.key + '" aria-label="להסיר את ' + esc(it.file.name) + '">' + svg(I.x, 14) + '</button>') + '</li>';
   }
-  function voiceRow(it, i) {
-    var tx = it.tstate === 'done' ? (it.transcript ? '<p class="jb-tx">' + esc(it.transcript) + '</p>' : '<p class="jb-tx muted">לא נשמעו מילים בהקלטה</p>')
-      : it.tstate === 'pending' ? '<p class="jb-tx muted">מתמללת…</p>'
-      : it.tstate === 'failed' ? '<p class="jb-tx muted">התמלול לא הצליח. <button type="button" class="jb-link" data-jb="retx" data-key="' + it.key + '">לנסות שוב</button></p>'
-      : it.tstate === 'later' ? '<p class="jb-tx muted">קלוד יתמלל את ההקלטה כשיתחיל לעבוד</p>'
-      : it.state === 'failed' ? '<p class="jb-tx muted">ההקלטה לא עלתה. <button type="button" class="jb-link" data-jb="retry" data-key="' + it.key + '">לנסות שוב</button></p>'
-      : '<p class="jb-tx muted">מעלה את ההקלטה… <span class="ltr" data-vpct="' + it.key + '">' + itemPct(it) + '%</span></p>';
-    return '<li class="jb-voice"><div class="jb-voice-head"><span class="jb-voice-ico">' + svg(I.mic, 16) + '</span><strong>הקלטה ' + (i + 1) + '</strong>' +
-      (it.secs ? '<span class="muted small ltr">' + Math.floor(it.secs / 60) + ':' + ('0' + it.secs % 60).slice(-2) + '</span>' : '') +
-      (sent ? '' : '<button type="button" class="jb-x inline" data-jb="remove" data-key="' + it.key + '" aria-label="למחוק את ההקלטה">' + svg(I.x, 14) + '</button>') + '</div>' +
-      (it.url ? '<audio controls preload="none" src="' + esc(it.url) + '"></audio>' : '') + tx + '</li>';
+  // one quiet line per recording that is not text yet (the audio itself still goes to Claude with the job)
+  function voiceLine(it) {
+    if (it.state === 'failed') return '<p class="jb-vline">' + svg(I.mic, 15) + '<span>ההקלטה לא עלתה. <button type="button" class="jb-link" data-jb="retry" data-key="' + it.key + '">לנסות שוב</button> · <button type="button" class="jb-link" data-jb="remove" data-key="' + it.key + '">לוותר</button></span></p>';
+    if (it.state !== 'ready' || it.tstate === 'pending') return '<p class="jb-vline"><span class="jb-spin" aria-hidden="true"></span><span>מתמללת את ההקלטה…</span></p>';
+    if (it.tstate === 'failed') return '<p class="jb-vline">' + svg(I.mic, 15) + '<span>התמלול לא הצליח. <button type="button" class="jb-link" data-jb="retx" data-key="' + it.key + '">לנסות שוב</button> · ההקלטה עצמה תגיע לקלוד</span></p>';
+    if (it.tstate === 'later') return '<p class="jb-vline">' + svg(I.mic, 15) + '<span>ההקלטה נשמרה, קלוד יתמלל אותה</span></p>';
+    if (it.tstate === 'done' && !it.transcript) return '<p class="jb-vline">' + svg(I.mic, 15) + '<span>לא נשמעו מילים בהקלטה</span></p>';
+    return '';
   }
 
   function paint(full) {
@@ -453,18 +461,17 @@
       $dlg.querySelector('[data-jb-files]').innerHTML = media.length ? '<div class="jb-files-head">' + fhead + '</div><ul class="jb-tiles">' + media.map(tile).join('') + '</ul>' : '';
     } else if (media.length) { $dlg.querySelector('.jb-files-head').innerHTML = fhead; updateTiles(media); }
     var vs = (rec ? 'rec' : '') + voices.map(function (x) { return x.key + x.state + x.tstate + (x.transcript || '').length; }).join();
-    if (vs === voiceSig) {
-      voices.forEach(function (x) { var el = $dlg.querySelector('[data-vpct="' + x.key + '"]'); if (el) el.textContent = itemPct(x) + '%'; });
-    } else { voiceSig = vs; $dlg.querySelector('[data-jb-voice]').innerHTML =
-      (voices.length ? '<ul class="jb-voices">' + voices.map(voiceRow).join('') + '</ul>' : '') +
+    if (vs !== voiceSig) { voiceSig = vs; $dlg.querySelector('[data-jb-voice]').innerHTML =
+      voices.map(voiceLine).join('') +
       (rec ? '<div class="jb-rec on"><button type="button" class="jb-mic stop" data-jb="stop" aria-label="לעצור את ההקלטה"><span class="jb-rec-ring" aria-hidden="true"></span>' + svg(I.stop, 26) + '</button>' +
           '<div><strong>מקליטה</strong> <span class="jb-rec-time ltr">0:00</span><div class="small muted">מדברים חופשי, ולוחצים לעצור</div></div></div>'
         : '<div class="jb-rec"><button type="button" class="jb-mic" data-jb="rec" aria-label="להקליט הודעה קולית">' + svg(I.mic, 26) + '</button>' +
-          '<div><strong>' + (voices.length ? 'להקליט עוד' : 'להקליט הודעה קולית') + '</strong><div class="small muted">קלוד מקבל את ההקלטה ואת התמלול שלה</div></div></div>'); }
-    var can = !sending && (items.length || textValue());
+          '<div><strong>' + (voices.length ? 'להקליט עוד' : 'להקליט במקום לכתוב') + '</strong><div class="small muted">מה שאומרים ייכתב בתיבה, ואפשר לתקן</div></div></div>'); }
+    var vp = voicePending().length;
+    var can = !sending && !vp && (items.length || textValue());
     $dlg.querySelector('[data-jb-foot]').innerHTML =
       '<button type="button" class="btn big block jb-send" data-jb="send"' + (can ? '' : ' disabled') + '>' + svg(I.send, 20) +
-      (sending ? 'שולחת…' : b.length ? 'לשלוח, הקבצים ימשיכו לעלות' : 'לשלוח לקלוד') + '</button>' +
+      (sending ? 'שולחת…' : vp ? 'מחכה לתמלול…' : b.filter(function (x) { return x.role === 'media'; }).length ? 'לשלוח, הקבצים ימשיכו לעלות' : 'לשלוח לקלוד') + '</button>' +
       (b.length ? '<p class="small muted jb-note">כדאי להשאיר את המסך פתוח עד שההעלאה מסתיימת</p>' : '') +
       (items.length || job ? '<button type="button" class="jb-link jb-cancel" data-jb="cancel">לבטל את המשימה</button>' : '');
     paintPill();
@@ -477,7 +484,7 @@
     $pill.hidden = !show;
     if (show) $pill.innerHTML = '<span class="jb-spin" aria-hidden="true"></span>' + (b.length === 1 ? 'קובץ אחד עולה' : b.length + ' קבצים עולים') + ' · ' + totals().pct + '%';
   }
-  document.addEventListener('input', function (e) { if (e.target && e.target.id === 'jb-text') { var s = $dlg && $dlg.querySelector('.jb-send'); if (s) s.disabled = sending || !(items.length || e.target.value.trim()); } });
+  document.addEventListener('input', function (e) { if (e.target && e.target.id === 'jb-text') { var s = $dlg && $dlg.querySelector('.jb-send'); if (s) s.disabled = sending || voicePending().length > 0 || !(items.length || e.target.value.trim()); } });
 
   /* ---------------- jobs list (התור של קלוד, היום) ---------------- */
   function fmtWhen(v) {
@@ -494,7 +501,7 @@
       var vid = /^video\//.test(f.content_type) && f.state === 'ready';
       return '<span class="jl-th">' + (img ? '<img src="' + esc(f.url) + '" alt="" loading="lazy">' : vid ? '<video src="' + esc(f.url) + '#t=0.1" muted playsinline preload="metadata"></video>' : svg(I.photo, 18)) + '</span>';
     }).join('') + (media.length > 6 ? '<span class="jl-th more">+' + (media.length - 6) + '</span>' : '');
-    var tx = voices.map(function (v) { return v.transcript ? '<p class="jl-voice">' + svg(I.mic, 14) + '<span>' + esc(v.transcript) + '</span></p>' : '<p class="jl-voice muted">' + svg(I.mic, 14) + '<span>הודעה קולית' + (v.transcript_state === 'pending' ? ', עוד לא תומללה' : '') + '</span></p>'; }).join('');
+    var tx = voices.filter(function (v) { return !(v.transcript && (j.text || '').indexOf(v.transcript.trim()) >= 0); }).map(function (v) { return v.transcript ? '<p class="jl-voice">' + svg(I.mic, 14) + '<span>' + esc(v.transcript) + '</span></p>' : '<p class="jl-voice muted">' + svg(I.mic, 14) + '<span>הודעה קולית' + (v.transcript_state === 'pending' ? ', עוד לא תומללה' : '') + '</span></p>'; }).join('');
     return '<li class="jl-card ' + esc(j.status) + '"><div class="jl-head"><span class="tag ' + st.cls + '">' + st.label + '</span><span class="small muted">' + fmtWhen(j.sent_at || j.created_at) + '</span></div>' +
       (j.text ? '<p class="jl-text">' + esc(j.text) + '</p>' : '') + tx +
       (media.length ? '<div class="jl-thumbs">' + thumbs + '</div>' : '') +
