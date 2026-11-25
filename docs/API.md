@@ -71,6 +71,7 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 - `POST /api/agent/jobs/<id>/status` `{status: new|working|done, note?, posts?: [post ids]}`; events `job_working` / `job_done` ring her bell. `posts` = what the job produced: her queue card opens them for approval
 - `PUT /api/agent/r2/poster/<guid>` body = JPEG (≤3 MB) → first frame of an R2 video, sets `versions.poster`. `GET /api/agent/r2/missing-posters` → `{versions: [{id, post_id, bunny_guid}]}`
 - `POST /api/agent/posts/<id>/restore` undoes a delete
+- `POST /api/agent/settings` `{bunny_library_id?, bunny_library_key?, bunny_cdn_host?, elevenlabs_key?, agency_name?}`, or `{bunny_account_key}` = make this site its own Bunny Stream library (409 `bunny_already_set` unless `replace: true`). CLI: `agent.py set-bunny-key` (reads BUNNY_API_KEY on the Mac)
 - CLI: `agent.py jobs | job <id> | download-job <id> <dir> | job-status <id> <status> --note "…" --posts 6,7 | restore-post <id> | backfill-posters | set-elevenlabs-key`. `upload` of an R2 video also uploads its first frame
 
 ## Shapes

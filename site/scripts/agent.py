@@ -40,6 +40,8 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
   agent.py download-job <id> <dir>        every file of the job into <dir>, plus <dir>/job.json (text + transcripts)
   agent.py job-status <id> working|done|new [--note "what I'm doing / what came out"] [--posts 6,7,8]   she sees status + note on the site;
                                           working and done also ring her bell
+  agent.py set-bunny-key                 BUNNY_API_KEY (the Bunny account key) from this Mac: makes the site its own Bunny Stream
+                                          library and saves its key, so uploads (long videos too) go to Bunny. Never printed
   agent.py set-elevenlabs-key             copy ELEVENLABS_API_KEY from this Mac (env / jennie-edit-kit / video-use .env) into
                                           the site's encrypted settings, so the site transcribes voice notes itself. Never printed
 """
@@ -415,6 +417,13 @@ def main(a):
             sys.exit("ELEVENLABS_API_KEY not found on this Mac")
         call("POST", "/settings", {"elevenlabs_key": k})
         print("elevenlabs key: saved on the site (encrypted)")
+        return
+    elif cmd == "set-bunny-key":
+        k = local_key("BUNNY_API_KEY")
+        if not k:
+            sys.exit("BUNNY_API_KEY not found on this Mac")
+        r = call("POST", "/settings", {"bunny_account_key": k})
+        print(f"bunny: new video library {r.get('library_id')} made for this site, key saved (encrypted). New videos go to Bunny")
         return
     elif cmd == "secrets":
         k = call("GET", "/secrets").get("elevenlabs_key")

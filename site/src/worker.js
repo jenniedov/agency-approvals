@@ -755,6 +755,15 @@ async function agentRoutes(req, env, settings, p, body) {
   }
   if (p === '/settings' && method === 'POST') { // installer: set Bunny / ElevenLabs without the UI
     const b = await body();
+    if (b.bunny_account_key) { // account API key: make this site its own Stream library (as in the settings screen)
+      if (settings.bunny_key_enc && !b.replace) return err('bunny_already_set', 409);
+      try {
+        const lib = await bunny.createLibrary(String(b.bunny_account_key).trim(), (settings.agency_name || 'agency') + ' videos');
+        await putSetting(env, 'bunny_library_id', lib.id); await putSetting(env, 'bunny_key_enc', await seal(env, lib.key));
+        if (lib.cdn) await putSetting(env, 'bunny_cdn_host', lib.cdn);
+        return json({ ok: true, library_id: lib.id, cdn: lib.cdn || null });
+      } catch (e) { return json({ error: 'bunny_key', status: e.status || null }, 400); }
+    }
     if (b.bunny_library_id) await putSetting(env, 'bunny_library_id', String(b.bunny_library_id));
     if (b.bunny_library_key) await putSetting(env, 'bunny_key_enc', await seal(env, String(b.bunny_library_key)));
     if (b.bunny_cdn_host) await putSetting(env, 'bunny_cdn_host', cleanHost(b.bunny_cdn_host));
