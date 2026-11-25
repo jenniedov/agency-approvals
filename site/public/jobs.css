@@ -109,3 +109,13 @@ dialog.jb-sheet { width: min(520px, calc(100vw - 24px)); overflow: auto; overscr
 .jl-del:hover, .jl-del:focus-visible { background: var(--surface-2); color: var(--pending); }
 .jl-card.go { cursor: pointer; }
 .jl-go { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; margin-top: 2px; }
+
+/* second picker (iPhone): Files, no photo-library converting */
+.jb-pick2 { margin-top: 8px; padding-block: 10px; }
+.jb-pick2 > svg { width: 40px; height: 40px; padding: 10px; }
+/* waiting for the iPhone to hand over the picked files */
+.jb-picking { display: flex; align-items: flex-start; gap: 10px; margin-top: 10px; padding: 12px 14px; border-radius: 14px; background: var(--surface-2); }
+.jb-picking .jb-spin { flex: none; margin-top: 3px; }
+.jb-picknote { margin: 10px 0 0; padding: 10px 14px; border-radius: 14px; background: var(--tag-fix-bg, var(--surface-2)); color: var(--tag-fix-fg); font-size: 14px; line-height: 1.5; }
+.jb-name { position: absolute; inset-inline: 8px; bottom: 34px; text-align: center; font-size: 10px; color: var(--frame-text, var(--text-2)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jb-tile .jb-warn { color: #ffc2b8; }

@@ -18,6 +18,8 @@
   var items = [];          // files in the sheet: {key, file, role, fileId, total, pending:[], etags:{}, loaded:{}, state, transcript, tstate, url}
   var inflight = 0;
   var sending = false;     // tapped send, waiting for the server
+  var picking = null, pickNote = '';   // iPhone picker state: 'media'/'files' while waiting for the change event; a note after a dropped pick
+  var IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   var sent = null;         // job object after send (sheet shows the "sent" state)
   var rec = null;          // active recording
   var wakeLock = null;
@@ -60,7 +62,9 @@
     send: '<path d="M20 4 3 11l7 2.5L12.5 21z"/><path d="m10 13.5 4-4"/>',
     retry: '<path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4.5h4.5"/>',
     trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
-    play: '<path d="M8 5.5v13l11-6.5z" fill="currentColor"/>'
+    play: '<path d="M8 5.5v13l11-6.5z" fill="currentColor"/>',
+    video: '<rect x="3" y="6" width="13" height="12" rx="2.5"/><path d="m16 10.5 5-3v9l-5-3z"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'
   };
 
   /* ---------------- upload engine ---------------- */
@@ -79,6 +83,7 @@
     var it = { key: ++seq, file: file, role: role || 'media', state: 'starting', pending: [], etags: {}, loaded: {}, done: 0, url: null };
     if (/^(image|video|audio)\//.test(file.type)) { try { it.url = URL.createObjectURL(file); } catch (_) {} }
     items.push(it);
+    if (!file.size) { it.state = 'failed'; it.empty = true; toast('הקובץ ' + (file.name || '') + ' הגיע ריק'); paint(); return it; }
     startItem(it);
     paint();
     return it;
@@ -92,7 +97,7 @@
       it.fileId = r.file_id; it.partSize = r.part_size; it.total = r.parts;
       it.pending = []; for (var n = 1; n <= r.parts; n++) it.pending.push(n);
       it.state = 'uploading'; keepAwake(); paint(); pump();
-    }).catch(function (e) { console.warn(e); it.state = 'failed'; paint(); });
+    }).catch(function (e) { console.warn(e); it.state = 'failed'; toast((it.file.name || 'קובץ') + ' לא התחיל לעלות. אפשר ללחוץ "לנסות שוב"'); paint(); });
   }
 
   function nextPart() {
@@ -309,7 +314,7 @@
   }
 
   /* ---------------- sheet ---------------- */
-  var $dlg, $fab, $pill, $input;
+  var $dlg, $fab, $pill, $input, $inputDocs;
   function build() {
     if ($dlg) return;
     $fab = document.createElement('button');
@@ -318,16 +323,42 @@
     $fab.onclick = open;
     $pill = document.createElement('button');
     $pill.type = 'button'; $pill.className = 'jb-pill'; $pill.hidden = true; $pill.onclick = open;
-    $input = document.createElement('input');
-    $input.type = 'file'; $input.multiple = true; $input.accept = 'video/*,image/*'; $input.hidden = true;
-    $input.onchange = function () { Array.prototype.forEach.call($input.files || [], function (f) { addFile(f, 'media'); }); $input.value = ''; };
+    // photo library picker; on the iPhone it prepares (converts) every video before the page gets anything
+    $input = fileInput('video/*,image/*');
+    // Files picker: WebKit maps application/octet-stream to public.data, has no image or video type to offer,
+    // so it skips the Photos menu and opens Files directly, with no converting (WKFileUploadPanel.mm)
+    $inputDocs = fileInput('application/octet-stream');
     $dlg = document.createElement('dialog');
     $dlg.className = 'sheet jb-sheet'; $dlg.setAttribute('aria-labelledby', 'jb-title');
     $dlg.addEventListener('click', onClick);
     $dlg.addEventListener('close', function () { if (rec) stopRec(); paintPill(); });
     $dlg.addEventListener('input', function (e) { if (e.target.id === 'jb-text') { try { localStorage.setItem('job_text', e.target.value); } catch (_) {} } });
-    document.body.appendChild($fab); document.body.appendChild($pill); document.body.appendChild($input); document.body.appendChild($dlg);
+    document.body.appendChild($fab); document.body.appendChild($pill); document.body.appendChild($dlg);
   }
+  function fileInput(accept) {
+    var el = document.createElement('input');
+    el.type = 'file'; el.multiple = true; el.accept = accept; el.hidden = true;
+    el.addEventListener('change', function () {
+      var fs = Array.prototype.slice.call(el.files || []);
+      picking = null; pickNote = fs.length ? '' : 'לא הגיעו קבצים';
+      fs.forEach(function (f) { addFile(f, 'media'); });
+      el.value = ''; paint();
+    });
+    // fired when the picker is closed without files, and also when iOS drops the whole pick because one item failed
+    el.addEventListener('cancel', function () {
+      var was = picking; picking = null;
+      pickNote = was === 'media' && IOS ? 'לא הגיעו קבצים. כשבוחרים הרבה סרטונים ארוכים, האייפון לפעמים מוותר על כולם. כדאי לנסות שוב עם פחות סרטונים בכל פעם, או להוסיף "מהקבצים"' : '';
+      paint();
+    });
+    return el;
+  }
+  // the inputs live inside the sheet (outside a modal dialog the page is inert); re-attach after a repaint
+  function keepInputs() { if ($dlg && $input.parentNode !== $dlg) { $dlg.appendChild($input); $dlg.appendChild($inputDocs); } }
+  function pick(which) {
+    picking = which; pickNote = ''; paint();
+    (which === 'files' ? $inputDocs : $input).click();
+  }
+
   function open() {
     build();
     if (sent && !busy().length && sent.status !== 'queued') resetDraft();
@@ -359,7 +390,9 @@
     var t = e.target.closest('[data-jb]'); if (!t) return;
     var a = t.getAttribute('data-jb');
     var it = items.filter(function (x) { return String(x.key) === t.getAttribute('data-key'); })[0];
-    if (a === 'pick') $input.click();
+    if (a === 'pick') pick('media');
+    else if (a === 'pickfiles') pick('files');
+    else if (a === 'pickoff') { picking = null; pickNote = ''; paint(); }
     else if (a === 'rec') startRec();
     else if (a === 'stop') stopRec();
     else if (a === 'send') send(false);
@@ -372,7 +405,7 @@
     else if (a === 'retx' && it) transcribeItem(it);
   }
 
-  var paintTimer = null, fileSig = null, voiceSig = null;
+  var paintTimer = null, fileSig = null, voiceSig = null, pickSig = null;
   function updateTiles(media) {
     media.forEach(function (it) {
       var li = $dlg.querySelector('[data-k="' + it.key + '"]'); if (!li) return;
@@ -383,18 +416,22 @@
   }
   function paintSoon() { if (!paintTimer) paintTimer = setTimeout(function () { paintTimer = null; paint(); }, 250); }
 
-  function tile(it) {
+  function tile(it, i) {
     var pct = itemPct(it);
     var isImg = /^image\//.test(it.file.type), isVid = /^video\//.test(it.file.type);
+    // a phone opens a decoder per <video>: preview only the first few videos that are not huge, the rest get an icon
+    var vidOk = isVid && (it.url || '').indexOf('blob:') !== 0 || (isVid && i < 3 && it.file.size < 300 * 1024 * 1024);
     var media = it.url && isImg ? '<img src="' + esc(it.url) + '" alt="">'
-      : it.url && isVid ? '<video src="' + esc(it.url) + (it.url.indexOf('blob:') === 0 ? '#t=0.1' : '') + '" muted playsinline preload="metadata"></video>'
-      : '<span class="jb-ph">' + svg(I.photo, 26) + '</span>';
+      : it.url && vidOk ? '<video src="' + esc(it.url) + (it.url.indexOf('blob:') === 0 ? '#t=0.1' : '') + '" muted playsinline preload="metadata"></video>'
+      : '<span class="jb-ph">' + svg(isVid ? I.video : I.photo, 26) + '</span>';
     var st = it.state === 'ready' ? '<span class="jb-ok">' + svg(I.check, 16) + '</span>'
+      : it.state === 'failed' && it.empty ? '<span class="jb-warn small">הגיע ריק</span>'
       : it.state === 'failed' ? '<button type="button" class="jb-retry" data-jb="retry" data-key="' + it.key + '">' + svg(I.retry, 16) + 'לנסות שוב</button>'
       : '<span class="jb-pct">' + (it.state === 'starting' ? '…' : it.state === 'finishing' ? '100%' : pct + '%') + '</span>';
     return '<li class="jb-tile ' + it.state + '" data-k="' + it.key + '">' + media +
-      (it.state !== 'ready' ? '<span class="jb-bar"><span style="width:' + (it.state === 'failed' ? itemPct(it) : pct) + '%"></span></span>' : '') +
-      '<span class="jb-tile-meta">' + st + '<span class="jb-size ltr">' + mb(it.file.size) + '</span></span>' +
+      (isVid && !vidOk ? '<span class="jb-name ltr">' + esc(it.file.name || '') + '</span>' : '') +
+      (it.state !== 'ready' && !it.empty ? '<span class="jb-bar"><span style="width:' + (it.state === 'failed' ? itemPct(it) : pct) + '%"></span></span>' : '') +
+      '<span class="jb-tile-meta">' + st + (it.file.size ? '<span class="jb-size ltr">' + mb(it.file.size) + '</span>' : '') + '</span>' +
       (sent ? '' : '<button type="button" class="jb-x" data-jb="remove" data-key="' + it.key + '" aria-label="להסיר את ' + esc(it.file.name) + '">' + svg(I.x, 14) + '</button>') + '</li>';
   }
   // one quiet line per recording that is not text yet (the audio itself still goes to Claude with the job)
@@ -422,12 +459,13 @@
           : waiting && failed.length ? '<p class="muted">' + (failed.length === 1 ? 'קובץ אחד לא עלה' : failed.length + ' קבצים לא עלו') + '.</p>' +
             '<div class="jb-row"><button type="button" class="btn ghost" data-jb="force">לשלוח בלי ' + (failed.length === 1 ? 'הקובץ הזה' : 'הקבצים האלה') + '</button></div>'
           : '<p class="muted">היא בתור של קלוד. אפשר לעקוב אחריה בעמוד התור של קלוד.</p>') +
-        (items.length ? '<ul class="jb-tiles">' + media.map(tile).join('') + '</ul>' : '') +
+        (items.length ? '<ul class="jb-tiles">' + media.map(function (x, i) { return tile(x, i); }).join('') + '</ul>' : '') +
         '<div class="jb-row"><a class="btn ghost" href="#/queue" data-jb="close">לתור של קלוד</a><button type="button" class="btn" data-jb="new">' + svg(I.plus, 18) + 'משימה חדשה</button></div></div>';
       var sig = 'sent|' + sent.status + '|' + b.length + '|' + failed.length + '|' + media.map(function (x) { return x.key + x.state; }).join();
       if ($dlg.getAttribute('data-sig') !== sig) {
         $dlg.setAttribute('data-sig', sig);
         $dlg.innerHTML = '<div class="jb-grab" aria-hidden="true"></div><button type="button" class="jb-close" data-jb="close" aria-label="לסגור">' + svg(I.x, 20) + '</button>' + html;
+        keepInputs();
       } else {
         updateTiles(media);
         var tb = $dlg.querySelector('.jb-total span'); if (tb) tb.style.width = tot.pct + '%';
@@ -438,7 +476,7 @@
     }
 
     if (full || !$dlg.querySelector('.jb-compose')) {
-      $dlg.removeAttribute('data-sig'); fileSig = voiceSig = null;
+      $dlg.removeAttribute('data-sig'); fileSig = voiceSig = pickSig = null;
       var saved = ''; try { saved = localStorage.getItem('job_text') || ''; } catch (_) {}
       var prev = document.getElementById('jb-text');
       $dlg.innerHTML = '<div class="jb-grab" aria-hidden="true"></div>' +
@@ -446,7 +484,9 @@
         '<div class="jb-body jb-compose">' +
         '<h2 id="jb-title">משימה חדשה לקלוד</h2>' +
         '<p class="muted small jb-lede">מוסיפים קבצים, ובזמן שהם עולים כותבים או מקליטים מה לעשות איתם</p>' +
-        '<button type="button" class="jb-pick" data-jb="pick">' + svg(I.photo, 24) + '<span><strong>להוסיף תמונות וסרטונים</strong><span class="small muted">מהגלריה או מהקבצים, כמה שרוצים</span></span></button>' +
+        '<button type="button" class="jb-pick" data-jb="pick">' + svg(I.photo, 24) + '<span><strong>להוסיף תמונות וסרטונים</strong><span class="small muted">' + (IOS ? 'מהגלריה, כמה שרוצים' : 'מהגלריה או מהקבצים, כמה שרוצים') + '</span></span></button>' +
+        (IOS ? '<button type="button" class="jb-pick jb-pick2" data-jb="pickfiles">' + svg(I.folder, 22) + '<span><strong>מהקבצים</strong><span class="small muted">לסרטונים ארוכים ששמרת ב"קבצים", בלי ההמתנה של הגלריה</span></span></button>' : '') +
+        '<div data-jb-pickstate></div>' +
         '<div data-jb-files></div>' +
         '<label class="jb-label" for="jb-text">מה לעשות עם זה</label>' +
         '<textarea id="jb-text" rows="3" placeholder="למשל: את הסטוריז להעלות היום בערב, ואת הסרטון לערוך לרילס של דקה"></textarea>' +
@@ -455,12 +495,21 @@
       var ta = document.getElementById('jb-text');
       ta.value = prev ? prev.value : saved;
     }
+    var ps = (picking || '') + '|' + pickNote;
+    if (ps !== pickSig) {
+      pickSig = ps;
+      $dlg.querySelector('[data-jb-pickstate]').innerHTML = picking
+        ? '<div class="jb-picking" role="status"><span class="jb-spin" aria-hidden="true"></span><div><strong>מכינה את הקבצים…</strong><div class="small muted">' +
+          (picking === 'media' && IOS ? 'אחרי שלוחצים "הוספה", האייפון מעביר את הסרטונים לדף. בסרטונים ארוכים זה יכול לקחת כמה דקות, כדאי לא לסגור את הדף' : 'הקבצים יופיעו כאן ברגע שייבחרו') +
+          ' · <button type="button" class="jb-link" data-jb="pickoff">להסתיר</button></div></div></div>'
+        : pickNote ? '<p class="jb-picknote" role="alert">' + esc(pickNote) + ' <button type="button" class="jb-link" data-jb="pickoff">הבנתי</button></p>' : '';
+    }
     var fhead = media.length ? '<span>' + (media.length === 1 ? 'קובץ אחד' : media.length + ' קבצים') + ' · <span class="ltr">' + mb(media.reduce(function (s, x) { return s + x.file.size; }, 0)) + '</span></span>' +
         (b.length ? '<span class="muted">עולה, ' + tot.pct + '%</span>' : failed.length ? '<span class="jb-warn">' + failed.length + ' לא עלו</span>' : '<span class="jb-okt">הכול עלה</span>') : '';
     var fs = media.map(function (x) { return x.key + x.state; }).join();
     if (fs !== fileSig) {
       fileSig = fs;
-      $dlg.querySelector('[data-jb-files]').innerHTML = media.length ? '<div class="jb-files-head">' + fhead + '</div><ul class="jb-tiles">' + media.map(tile).join('') + '</ul>' : '';
+      $dlg.querySelector('[data-jb-files]').innerHTML = media.length ? '<div class="jb-files-head">' + fhead + '</div><ul class="jb-tiles">' + media.map(function (x, i) { return tile(x, i); }).join('') + '</ul>' : '';
     } else if (media.length) { $dlg.querySelector('.jb-files-head').innerHTML = fhead; updateTiles(media); }
     var vs = (rec ? 'rec' : '') + voices.map(function (x) { return x.key + x.state + x.tstate + (x.transcript || '').length; }).join();
     if (vs !== voiceSig) { voiceSig = vs; $dlg.querySelector('[data-jb-voice]').innerHTML =
@@ -476,6 +525,7 @@
       (sending ? 'שולחת…' : vp ? 'מחכה לתמלול…' : b.filter(function (x) { return x.role === 'media'; }).length ? 'לשלוח, הקבצים ימשיכו לעלות' : 'לשלוח לקלוד') + '</button>' +
       (b.length ? '<p class="small muted jb-note">כדאי להשאיר את המסך פתוח עד שההעלאה מסתיימת</p>' : '') +
       (items.length || job ? '<button type="button" class="jb-link jb-cancel" data-jb="cancel">לבטל את המשימה</button>' : '');
+    keepInputs();
     paintPill();
   }
 
