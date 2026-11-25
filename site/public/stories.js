@@ -19,6 +19,7 @@
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
     trash: '<path d="M5 7h14M10 7V4.5h4V7M7 7l1 12.5h8L17 7M10.5 11v5M13.5 11v5"/>',
     note: '<path d="M20.7 16.9A9.6 9.6 0 1 0 17 20.6L21.8 22z"/>',
+    scissors: '<circle cx="6" cy="6.5" r="2.6"/><circle cx="6" cy="17.5" r="2.6"/><path d="M8.3 8 20 18.2M8.3 16 20 5.8"/>',
   };
   const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[n] || ''}</svg>`;
   const $ = (s, r) => r.querySelector(s);
@@ -36,6 +37,17 @@
   }
   const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
   const round1 = (n) => Math.round((n || 0) * 10) / 10;
+  const fmt1 = (s) => { s = Math.max(0, Math.round((s || 0) * 10) / 10); const m = Math.floor(s / 60), r = s - m * 60; return m + ':' + (r < 10 ? '0' : '') + r.toFixed(1); };
+  /* the trim she set on a story (versions.trim_in / trim_out, seconds): playback runs from a to b only */
+  const TRIM_MIN = 1;
+  const trimOf = (post, d) => {
+    const v = (post && post.version) || {};
+    const a = Math.max(0, +v.trim_in || 0);
+    let b = v.trim_out != null ? +v.trim_out : Infinity;
+    if (d) b = Math.min(b, d);
+    return { a, b, on: a > 0.05 || (v.trim_out != null && (!d || v.trim_out < d - 0.05)) };
+  };
+  const once = (el, ev, ms) => new Promise((res) => { let t = 0; const f = () => { clearTimeout(t); el.removeEventListener(ev, f); res(true); }; el.addEventListener(ev, f); t = setTimeout(() => { el.removeEventListener(ev, f); res(false); }, ms); });
   const vibrate = (ms) => { try { navigator.vibrate && navigator.vibrate(ms); } catch { /* no-op */ } };
   const plural = (n, one, many) => (n === 1 ? one : n + ' ' + many);
 
@@ -113,7 +125,7 @@
     /* video events (bound to whichever element is current: a preloaded one can be swapped in) */
     V.bindVid = (v) => {
       const on = (ev, fn) => { v.addEventListener(ev, fn); V.onVid[ev] = fn; };
-      on('ended', () => { if (V && !V.ended && V.vid === v) next(); });
+      on('ended', () => { if (!V || V.vid !== v) return; if (V.trim) { try { v.currentTime = V.trim.a; } catch { /* ignore */ } if (!V.trim.paused) v.play().catch(() => {}); return; } if (!V.ended) next(); });
       on('playing', () => { root.classList.remove('buffering'); verr.replaceChildren(); });
       on('waiting', () => root.classList.add('buffering'));
       on('loadeddata', () => { root.classList.add('ready'); root.classList.remove('buffering'); });
@@ -147,6 +159,7 @@
     V.onKey = (e) => {
       if (!V || document.querySelector('.fy-modal')) return; // a confirm box on top handles its own keys
       if (RO) { if (e.key === 'ArrowRight') { e.preventDefault(); next(); } else if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); } else if (e.key === ' ') { e.preventDefault(); togglePause(); } else if (e.key === 'm' || e.key === 'M') setMuted(!V.vid.muted); return; }
+      if (V.trim) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTrim(false); } else if (e.key === ' ' && !(e.target.closest && e.target.closest('button'))) { e.preventDefault(); trimToggle(); } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') e.preventDefault(); return; }
       if (V.editing) { if (e.key === 'Escape') { e.preventDefault(); V.finishEditor && V.finishEditor(); } return; }
       if (e.target === input) { if (e.key === 'Escape') { input.value = ''; root.classList.remove('has-text'); input.blur(); exitComment(); } return; }
       if (e.target && e.target.type === 'range') return;
@@ -168,7 +181,8 @@
   const cur = () => V.list[V.i];
 
   function show(i) {
-    V.i = i; V.ended = false; V.userPaused = false;
+    if (V.trim) closeTrim(false);
+    V.i = i; V.ended = false; V.userPaused = false; V.reseek = 0;
     V.end.hidden = true; V.root.classList.remove('at-end', 'ready');
     V.root.classList.add('buffering');
     V.verr.replaceChildren(); V.center.replaceChildren();
@@ -191,13 +205,21 @@
       if (sp) { V.pool.delete(V.srcs[0]); adopt(sp); }
       if (V.vid.getAttribute('src') === V.srcs[0]) {
         const warm = V.vid.readyState >= 2;
-        if (V.vid.currentTime > 0.05) { try { V.vid.currentTime = 0; } catch { /* ignore */ } }
+        seekStart();
         if (warm) { V.root.classList.add('ready'); V.root.classList.remove('buffering'); }
-      } else { V.vid.src = V.srcs[0]; V.vid.currentTime = 0; }
+      } else { V.vid.src = V.srcs[0]; seekStart(); }
       play();
     }
     startRaf();
     preloadSoon();
+  }
+
+  // start where her trim starts (0 when not trimmed); before the metadata is in, wait for it
+  function seekStart() {
+    const v = V.vid, post = cur().post, a = trimOf(post).a;
+    const go = () => { if (V && V.vid === v && cur().post === post && Math.abs((v.currentTime || 0) - a) > 0.05) { try { v.currentTime = a; } catch { /* ignore */ } } };
+    if (v.readyState >= 1) go();
+    else { try { v.currentTime = a; } catch { /* ignore */ } v.addEventListener('loadedmetadata', go, { once: true }); }
   }
 
   /* ---- preloading: the next and the previous story wait in hidden, muted, playsinline <video> elements ---- */
@@ -241,7 +263,7 @@
   }
   function preloadSoon() { // after the current video can play, so the two never fight for bandwidth
     const v = V.vid, at = V.i;
-    const run = () => { if (V && V.i === at) preloadNow(); };
+    const run = () => { if (V && V.i === at && !V.trim) preloadNow(); };
     if (v.readyState >= 3) run(); else { v.addEventListener('canplay', run, { once: true }); setTimeout(run, 4000); }
   }
 
@@ -259,6 +281,7 @@
         h('span', { class: 'st-title', dir: 'auto' }, post.title || '')),
       h('span', { class: 'st-badge' }),
       h('span', { class: 'st-grow' }),
+      V.opts.readonly ? null : h('button', { type: 'button', class: 'st-ib st-trim' + (trimOf(post, durationOf()).on ? ' on' : ''), 'aria-label': 'חיתוך הסטורי', title: 'חיתוך', html: icon('scissors'), onclick: () => openTrim() }),
       V.opts.readonly ? null : h('button', { type: 'button', class: 'st-ib st-aa', 'aria-label': 'הוספת טקסט', onclick: () => openEditor(null) }, 'Aa'),
       h('button', { type: 'button', class: 'st-ib st-pp', 'aria-label': paused ? 'המשך' : 'עצירה', html: icon(paused ? 'play' : 'pause'), onclick: () => togglePause() }),
       h('button', { type: 'button', class: 'st-ib st-mute', 'aria-label': muted ? 'הפעלת שמע' : 'השתקה', html: icon(muted ? 'mute' : 'vol'), onclick: () => setMuted(!V.vid.muted) }),
@@ -288,9 +311,14 @@
     const tick = () => {
       if (!V) return;
       const b = V.bars.children[cur().set.posts.indexOf(cur().post)];
-      const d = V.vid.duration || (cur().post.version && cur().post.version.duration) || 0;
-      const f = d ? Math.min(1, (V.vid.currentTime || 0) / d) : 0;
+      const d = durationOf(), t = V.vid.currentTime || 0;
+      const tr = V.trim ? { a: V.trim.a, b: V.trim.b } : trimOf(cur().post, d);
+      const end = isFinite(tr.b) ? tr.b : d;
+      const f = d ? Math.min(1, Math.max(0, (t - tr.a) / Math.max(0.1, end - tr.a))) : 0;
       if (b) b.firstChild.style.transform = 'scaleX(' + f + ')';
+      if (V.trim) { paintTrimHead(t); if (!V.vid.paused && !V.trim.drag && t >= end - 0.02) { try { V.vid.currentTime = V.trim.a; } catch { /* ignore */ } } }
+      else if (!V.vid.paused && !V.ended && V.end.hidden && d && end < d - 0.05 && t >= end) next(); // her trim ends here
+      else if (!V.vid.paused && tr.a > 0.05 && t < tr.a - 0.25 && !V.scrubbing && !V.vid.seeking && V.vid.readyState >= 2 && (V.reseek = (V.reseek || 0) + 1) <= 3) { try { V.vid.currentTime = tr.a; } catch { /* ignore */ } }
       V.raf = requestAnimationFrame(tick);
     };
     V.raf = requestAnimationFrame(tick);
@@ -298,6 +326,7 @@
 
   async function play() {
     if (!V || V.held || V.typing || V.editing || V.userPaused || V.ended || !V.vid.getAttribute('src')) return;
+    if (V.trim && (V.trim.paused || V.trim.drag)) return;
     try { await V.vid.play(); }
     catch (e) {
       if (e && e.name === 'NotAllowedError' && !V.vid.muted) {
@@ -340,7 +369,7 @@
   function prev() {
     if (!V) return;
     if (!V.end.hidden) { show(V.list.length - 1); return; }
-    if (V.i === 0) { V.vid.currentTime = 0; resume(); return; }
+    if (V.i === 0) { seekStart(); resume(); return; }
     show(V.i - 1);
   }
 
@@ -354,12 +383,14 @@
       id = e.pointerId; t0 = performance.now(); x0 = e.clientX; y0 = e.clientY;
       try { tap.setPointerCapture(id); } catch { /* old Safari */ }
       clearTimeout(holdT);
+      if (V.trim) return;
       holdT = setTimeout(() => { V.held = true; pause(); V.root.classList.add('holding'); }, 220);
     });
     const up = (e, cancel) => {
       if (e.pointerId !== id) return;
       id = null; clearTimeout(holdT);
       const dy = e.clientY - y0, dx = e.clientX - x0;
+      if (V.trim) { if (!cancel && Math.abs(dx) < 14 && Math.abs(dy) < 14) trimToggle(); return; }
       const swipe = Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3;
       if (V.held) {
         V.held = false; V.root.classList.remove('holding');
@@ -450,7 +481,9 @@
     if (!V || V.typing) return;
     V.typing = true; pause();
     V.root.classList.add('typing', 'commenting');
-    V.range.max = String(durationOf() || 1);
+    const tr = trimOf(cur().post, durationOf());
+    V.range.min = String(tr.a);
+    V.range.max = String((isFinite(tr.b) ? tr.b : durationOf()) || 1);
     V.range.value = String(V.vid.currentTime || 0);
     V.scrub.hidden = false; paintScrub();
   }
@@ -604,6 +637,190 @@
     done.addEventListener('click', finish);
     ed.addEventListener('pointerdown', (e) => { if (e.target === ed) { e.preventDefault(); finish(); } });
     setTimeout(() => box.focus(), 30);
+  }
+
+
+  /* ---- trim, like Instagram: a filmstrip under the story, two handles (start, end), a playhead.
+     Plays only the chosen part, in a loop. Saved per version (POST /api/posts/<id>/trim); the file stays whole. ---- */
+  function openTrim() {
+    if (!V || V.trim || V.editing || V.opts.readonly) return;
+    if (V.typing) { V.input.blur(); exitComment(); }
+    const post = cur().post;
+    if (!post.version || !V.srcs.length) { toast('אין עדיין סרטון לחתוך'); return; }
+    const d0 = durationOf();
+    if (d0 && d0 < TRIM_MIN + 0.2) { toast('הסטורי קצר מדי לחיתוך'); return; }
+    const saved = trimOf(post, d0);
+    const T = V.trim = { post, dur: d0, a: saved.a, b: isFinite(saved.b) ? saved.b : d0, paused: false, drag: null, wasPaused: V.userPaused, want: null };
+    V.userPaused = false; V.root.classList.remove('user-paused'); V.center.replaceChildren();
+    // the two preloaded neighbours give their decoders to the filmstrip
+    for (const [, pv] of V.pool) { pv.removeAttribute('src'); try { pv.load(); } catch { /* ignore */ } pv.remove(); }
+    V.pool.clear();
+
+    const timeB = h('b', {}), timeS = h('small', {});
+    const film = h('div', { class: 'st-tr-film' });
+    const sel = h('div', { class: 'st-tr-sel' }, h('i', { class: 'st-tr-h l' }), h('i', { class: 'st-tr-h r' }));
+    const dimL = h('div', { class: 'st-tr-dim l' }), dimR = h('div', { class: 'st-tr-dim r' });
+    const head = h('div', { class: 'st-tr-head' });
+    const strip = h('div', { class: 'st-tr-strip', role: 'group', 'aria-label': 'בחירת ההתחלה והסוף' }, film, dimL, dimR, sel, head);
+    const ppBtn = h('button', { type: 'button', class: 'st-tr-pp', 'aria-label': 'עצירה', html: icon('pause') });
+    const saveBtn = h('button', { type: 'button', class: 'st-tr-save' }, 'שמירה');
+    const cancelBtn = h('button', { type: 'button', class: 'st-tr-cancel' }, 'ביטול');
+    const resetBtn = h('button', { type: 'button', class: 'st-tr-reset' }, 'חזרה לסרטון המלא');
+    const loading = h('div', { class: 'st-tr-load' }, 'טוען את הסרטון…');
+    const panel = h('div', { class: 'st-tr', dir: 'ltr' },
+      h('div', { class: 'st-tr-top' }, cancelBtn, h('span', { class: 'st-tr-time', 'aria-live': 'polite' }, timeB, timeS), saveBtn),
+      h('div', { class: 'st-tr-row' }, ppBtn, strip),
+      h('div', { class: 'st-tr-foot' }, resetBtn), loading);
+    Object.assign(T, { panel, strip, film, sel, dimL, dimR, head, timeB, timeS, ppBtn, saveBtn, resetBtn, loading });
+    V.media.append(panel);
+    V.root.classList.add('trimming');
+    panel.addEventListener('pointerdown', (e) => e.stopPropagation());
+    cancelBtn.addEventListener('click', () => closeTrim(false));
+    saveBtn.addEventListener('click', () => saveTrim());
+    ppBtn.addEventListener('click', () => trimToggle());
+    resetBtn.addEventListener('click', () => { if (!T.dur) return; T.a = 0; T.b = T.dur; paintTrim(); trimSeek(0, true); vibrate(8); });
+    bindStrip(T);
+
+    const ready = () => {
+      if (V.trim !== T) return;
+      T.dur = durationOf();
+      if (!T.dur) return;
+      if (T.dur < TRIM_MIN + 0.2) { closeTrim(false); toast('הסטורי קצר מדי לחיתוך'); return; }
+      const s2 = trimOf(post, T.dur);
+      if (!d0) { T.a = s2.a; T.b = isFinite(s2.b) ? s2.b : T.dur; }
+      T.b = Math.min(T.b, T.dur); T.a = Math.min(T.a, T.b - TRIM_MIN);
+      panel.classList.add('ok');
+      paintTrim();
+      filmstrip(T);
+      trimSeek(T.a, true);
+    };
+    if (d0) ready(); else { paintTrim(); V.vid.addEventListener('loadedmetadata', ready, { once: true }); V.vid.addEventListener('durationchange', ready, { once: true }); }
+    paintHead();
+  }
+  const xOf = (T, t) => (T.dur ? t / T.dur : 0) * T.strip.clientWidth;
+  function paintTrim() {
+    const T = V.trim; if (!T) return;
+    const W = T.strip.clientWidth, l = xOf(T, T.a), r = xOf(T, T.b);
+    T.sel.style.left = l + 'px'; T.sel.style.width = Math.max(0, r - l) + 'px';
+    T.dimL.style.width = l + 'px'; T.dimR.style.width = Math.max(0, W - r) + 'px';
+    const len = round1(T.b - T.a);
+    T.timeB.textContent = T.dur ? fmt1(T.a) + ' – ' + fmt1(T.b) : '';
+    T.timeS.textContent = T.dur ? (len === 1 ? 'שנייה אחת' : len.toFixed(1) + ' שניות') : '';
+    T.resetBtn.disabled = !T.dur || (T.a < 0.05 && T.b > T.dur - 0.05);
+    T.ppBtn.innerHTML = icon(T.paused ? 'play' : 'pause');
+    T.ppBtn.setAttribute('aria-label', T.paused ? 'ניגון' : 'עצירה');
+  }
+  function paintTrimHead(t) { const T = V.trim; if (T && T.dur) T.head.style.transform = 'translateX(' + xOf(T, Math.min(T.dur, Math.max(0, t))) + 'px)'; }
+  // seek without piling up seeks while a handle moves: the newest wanted time wins
+  function trimSeek(t, thenPlay) {
+    const T = V.trim, v = V.vid; if (!T) return;
+    T.want = t;
+    const go = () => { if (!V || V.trim !== T || T.want == null) return; const w = T.want; T.want = null; try { v.currentTime = w; } catch { /* ignore */ } };
+    if (!v.seeking) go(); else v.addEventListener('seeked', go, { once: true });
+    paintTrimHead(t);
+    if (thenPlay && !T.paused) v.play().catch(() => {});
+  }
+  function trimToggle() {
+    const T = V.trim; if (!T) return;
+    T.paused = !T.paused;
+    if (T.paused) V.vid.pause();
+    else { const t = V.vid.currentTime || 0; if (t < T.a || t >= T.b - 0.05) trimSeek(T.a); V.vid.play().catch(() => {}); }
+    paintTrim();
+  }
+  function bindStrip(T) {
+    const strip = T.strip;
+    strip.addEventListener('contextmenu', (e) => e.preventDefault());
+    const tAt = (x) => { const r = strip.getBoundingClientRect(); return Math.min(T.dur, Math.max(0, (x - r.left) / r.width * T.dur)); };
+    strip.addEventListener('pointerdown', (e) => {
+      if (!T.dur || T.drag) return;
+      e.preventDefault(); e.stopPropagation();
+      const r = strip.getBoundingClientRect(), x = e.clientX - r.left;
+      const l = xOf(T, T.a), rr = xOf(T, T.b), near = 26;
+      const dl = Math.abs(x - l), dr = Math.abs(x - rr);
+      let which = null;
+      // when both handles are close (a short trim), the side of the middle decides which one moves
+      if (dl < near && dr < near) which = x < (l + rr) / 2 ? 'a' : 'b';
+      else if (dl < near) which = 'a';
+      else if (dr < near) which = 'b';
+      T.drag = { id: e.pointerId, which, off: which ? x - (which === 'a' ? l : rr) : 0, was: !T.paused };
+      try { strip.setPointerCapture(e.pointerId); } catch { /* old Safari */ }
+      V.vid.pause();
+      strip.classList.add('dragging', which ? 'drag-' + which : 'drag-head');
+      move(e);
+    });
+    const move = (e) => {
+      const D = T.drag; if (!D || e.pointerId !== D.id) return;
+      e.preventDefault();
+      const t = Math.round(tAt(e.clientX - D.off) * 10) / 10;
+      if (D.which === 'a') { T.a = Math.max(0, Math.min(t, T.b - TRIM_MIN)); trimSeek(T.a); }
+      else if (D.which === 'b') { T.b = Math.min(T.dur, Math.max(t, T.a + TRIM_MIN)); trimSeek(Math.max(T.a, T.b - 0.05)); }
+      else trimSeek(Math.min(T.b - 0.05, Math.max(T.a, t))); // the playhead: scrub inside the chosen part
+      paintTrim();
+    };
+    const up = (e) => {
+      const D = T.drag; if (!D || e.pointerId !== D.id) return;
+      T.drag = null;
+      strip.classList.remove('dragging', 'drag-a', 'drag-b', 'drag-head');
+      if (D.which) trimSeek(T.a);
+      if (!T.paused) V.vid.play().catch(() => {});
+      paintTrim();
+    };
+    strip.addEventListener('pointermove', move);
+    strip.addEventListener('pointerup', up);
+    strip.addEventListener('pointercancel', up);
+    strip.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false }); // no page scroll while dragging (old iOS)
+  }
+  // frames for the strip from a hidden copy of the video (the playing one keeps playing)
+  async function filmstrip(T) {
+    const W = T.film.clientWidth, H = T.film.clientHeight;
+    const n = Math.max(6, Math.min(12, Math.round(W / 34)));
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const cs = Array.from({ length: n }, () => { const c = document.createElement('canvas'); c.width = Math.ceil(W / n * dpr); c.height = Math.ceil(H * dpr); return c; });
+    T.film.replaceChildren(...cs);
+    const fv = mkVid();
+    fv.src = V.vid.currentSrc || V.srcs[0];
+    V.sbox.append(fv);
+    try {
+      if (!(await once(fv, 'loadeddata', 10000)) || V.trim !== T) return;
+      if (IOS) { try { await fv.play(); fv.pause(); } catch { /* frames may stay grey */ } }
+      for (let k = 0; k < n; k++) {
+        if (!V || V.trim !== T) return;
+        fv.currentTime = Math.min(T.dur - 0.05, (k + 0.5) / n * T.dur);
+        if (!(await once(fv, 'seeked', 5000))) continue;
+        const c = cs[k], ctx = c.getContext('2d'), vw = fv.videoWidth || 9, vh = fv.videoHeight || 16;
+        const sc = Math.max(c.width / vw, c.height / vh), dw = vw * sc, dh = vh * sc;
+        try { ctx.drawImage(fv, (c.width - dw) / 2, (c.height - dh) / 2, dw, dh); c.classList.add('ok'); } catch { /* ignore */ }
+      }
+    } finally { fv.removeAttribute('src'); try { fv.load(); } catch { /* ignore */ } fv.remove(); }
+  }
+  async function saveTrim() {
+    const T = V.trim; if (!T || !T.dur) return;
+    const full = T.a < 0.05 && T.b > T.dur - 0.05;
+    const had = trimOf(T.post, T.dur).on;
+    if (full && !had) { closeTrim(false); return; }
+    T.saveBtn.disabled = true;
+    try {
+      const r = await V.opts.api('/api/posts/' + T.post.id + '/trim', { method: 'POST', body: full ? { reset: true } : { in: round1(T.a), out: round1(T.b) } });
+      if (!V || V.trim !== T) return;
+      T.post.version.trim_in = r && r.trim_in != null ? r.trim_in : null;
+      T.post.version.trim_out = r && r.trim_out != null ? r.trim_out : null;
+      closeTrim(true);
+      toast(full ? 'הסטורי חזר לאורך המלא' : 'החיתוך נשמר, ' + round1(T.b - T.a).toFixed(1) + ' שניות');
+    } catch {
+      if (V && V.trim === T) { T.saveBtn.disabled = false; toast('החיתוך לא נשמר, אפשר לנסות שוב'); }
+    }
+  }
+  function closeTrim() {
+    const T = V && V.trim; if (!T) return;
+    V.trim = null;
+    T.panel.remove();
+    V.root.classList.remove('trimming');
+    V.userPaused = T.wasPaused;
+    V.root.classList.toggle('user-paused', V.userPaused);
+    try { V.vid.currentTime = trimOf(cur().post, durationOf()).a; } catch { /* ignore */ }
+    paintHead(); paintState();
+    resume();
+    preloadSoon();
   }
 
   function burst() {

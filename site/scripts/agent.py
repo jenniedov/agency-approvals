@@ -19,6 +19,9 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
                                           x, y = CENTRE of the box in percent of a 1080x1920 frame (50,50 = middle), width_pct = MAX box width (box shrink-wraps the text; padding included) in
                                           percent of the 1080 width, font_px_at_1080 = font size in px on the 1080 px wide frame,
                                           rotation in degrees. Font Heebo ExtraBold (800), centred, line-height 1.25; box padding .22em .5em, radius .4em
+  agent.py trim <post_id>                 Instagram-style trim Jennie set on a story's current version: {trim_in, trim_out, duration} in seconds,
+                                          null = not trimmed on that side. Also `trim_in`/`trim_out` in `approved`. bake_texts.py applies it
+                                          (cuts video+audio, re-encodes), so always bake a story before posting, even with no stickers
   agent.py share-stories <post_id> <post_id> ...   public view-only link (/s/<token>) to those stories in that order, current versions, with her text stickers;
                                           no login, no approve/comment. Prints the URL
   agent.py revoke-share <token>           kills a share link
@@ -343,6 +346,8 @@ def main(a):
         if kind:
             q.append("kind=" + urllib.parse.quote(kind))
         out = call("GET", "/approved" + ("?" + "&".join(q) if q else "")).get("posts", [])
+    elif cmd == "trim":
+        out = call("GET", f"/posts/{int(a[0])}/trim")
     elif cmd == "texts":
         out = call("GET", f"/posts/{int(a[0])}/texts").get("texts", [])
     elif cmd == "share-stories":

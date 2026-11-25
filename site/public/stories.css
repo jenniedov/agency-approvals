@@ -233,3 +233,43 @@ body.st-open .fy-top, body.st-open .fy-tabs { visibility: hidden; }
   }
   .st-ro .st-media { flex: none; }
 }
+
+/* ---- trim (Instagram-style): filmstrip with two handles + a playhead, at the bottom of the story ---- */
+.st-trim.on { color: #ffd34d; }
+.st.trimming .st-bar, .st.trimming .st-scrub, .st.trimming .st-nav, .st.trimming .st-row .st-ib, .st.trimming .st-approve, .st.trimming .st-badge { opacity: 0; pointer-events: none; }
+.st.trimming .st-center { display: none; }
+.st-tr {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 8; padding: 10px 12px calc(14px + var(--safe-b, 0px));
+  background: linear-gradient(to top, rgba(0, 0, 0, .86) 55%, rgba(0, 0, 0, .55) 85%, transparent);
+  font-family: var(--fy-font); color: #fff; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.st-tr-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.st-tr-top button { min-height: 40px; padding: 0 14px; border-radius: 20px; font: inherit; font-size: 15px; font-weight: 600; color: #fff; }
+.st-tr-cancel { background: rgba(255, 255, 255, .14); }
+.st-tr-save { background: #fff; color: #111 !important; }
+.st-tr-save:disabled { opacity: .5; }
+.st-tr-time { display: flex; flex-direction: column; align-items: center; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.st-tr-time b { font-size: 15px; font-weight: 700; letter-spacing: .01em; }
+.st-tr-time small { font-size: 12px; opacity: .75; direction: rtl; }
+.st-tr-row { display: flex; align-items: center; gap: 10px; }
+.st-tr-pp { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .16); color: #fff; }
+.st-tr-pp .ic { width: 22px; height: 22px; }
+.st-tr-strip { position: relative; flex: 1; height: 56px; margin: 0 14px; touch-action: none; cursor: pointer; }
+.st-tr-film { position: absolute; inset: 0; display: flex; border-radius: 6px; overflow: hidden; background: #2a2a2a; }
+.st-tr-film canvas { flex: 1; min-width: 0; height: 100%; opacity: 0; transition: opacity .25s; }
+.st-tr-film canvas.ok { opacity: 1; }
+.st-tr-dim { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, .62); pointer-events: none; }
+.st-tr-dim.l { left: 0; border-radius: 6px 0 0 6px; }
+.st-tr-dim.r { right: 0; border-radius: 0 6px 6px 0; }
+.st-tr-sel { position: absolute; top: -3px; bottom: -3px; border: 3px solid #fff; border-left-width: 14px; border-right-width: 14px; border-radius: 8px; box-sizing: content-box; pointer-events: none; transform: translateX(-14px); }
+.st-tr-h { position: absolute; top: 50%; width: 3px; height: 18px; margin-top: -9px; border-radius: 2px; background: #555; }
+.st-tr-h.l { left: -8.5px; }
+.st-tr-h.r { right: -8.5px; }
+/* bigger hit area is in the JS (26px around each handle); this only shows which one is held */
+.st-tr-strip.drag-a .st-tr-sel, .st-tr-strip.drag-b .st-tr-sel { border-color: #ffd34d; }
+.st-tr-head { position: absolute; top: -6px; bottom: -6px; left: -1.5px; width: 3px; border-radius: 2px; background: #fff; box-shadow: 0 0 4px rgba(0, 0, 0, .6); pointer-events: none; will-change: transform; }
+.st-tr-foot { display: flex; justify-content: center; margin-top: 8px; }
+.st-tr-reset { font: inherit; font-size: 13px; color: #fff; opacity: .85; text-decoration: underline; text-underline-offset: 3px; padding: 6px 10px; }
+.st-tr-reset:disabled { opacity: .3; text-decoration: none; }
+.st-tr-load { display: none; position: absolute; inset: 0; place-items: center; font-size: 14px; background: rgba(0, 0, 0, .55); }
+.st-tr:not(.ok) .st-tr-load { display: grid; }

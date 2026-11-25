@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Burn the client's IG-style text stickers (from the stories view) into a video before posting.
+"""Burn the client's IG-style text stickers (from the stories view) into a video before posting,
+and apply the trim she set there (start/end), so what gets posted is what she approved.
 
 usage: bake_texts.py <post_id> <in.mp4> <out.mp4>
-Reads the stickers with `agent.py texts <post_id>`, draws them with the same CSS as stories.css
-(.st-text / .s-white-box / .s-black-box / .s-shadow) in headless Chrome to a transparent
-1080x1920 PNG, then overlays it with ffmpeg. No stickers -> copies the file unchanged.
+Reads the stickers with `agent.py texts <post_id>` and the trim with `agent.py trim <post_id>`,
+draws the stickers with the same CSS as stories.css (.st-text / .s-white-box / .s-black-box / .s-shadow)
+in headless Chrome to a transparent 1080x1920 PNG, then overlays it with ffmpeg. The trim is cut
+frame-accurately (output seeking, video and audio re-encoded). No stickers and no trim -> copies the file unchanged.
 """
 import html, json, os, shutil, subprocess, sys, tempfile
 
@@ -29,9 +31,19 @@ font-family:Heebo,sans-serif;font-weight:800;line-height:1.4;text-align:center;w
 def main():
     post, src, out = sys.argv[1], sys.argv[2], sys.argv[3]
     here = os.path.dirname(os.path.abspath(__file__))
-    texts = json.loads(subprocess.check_output([sys.executable, os.path.join(here, "agent.py"), "texts", post]))
+    agent = lambda *x: json.loads(subprocess.check_output([sys.executable, os.path.join(here, "agent.py"), *x]))
+    texts = agent("texts", post)
+    tr = agent("trim", post)
+    cut = []  # output seeking after -i: exact to the frame because we re-encode
+    if tr.get("trim_in"): cut += ["-ss", f'{tr["trim_in"]:.3f}']
+    if tr.get("trim_out") is not None and not (tr.get("duration") and tr["trim_out"] >= tr["duration"] - 0.05): cut += ["-to", f'{tr["trim_out"]:.3f}']
+    enc = ["-c:v", "libx264", "-crf", "17", "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    aud = ["-c:a", "aac", "-b:a", "192k"] if cut else ["-c:a", "copy"]
     if not texts:
-        shutil.copyfile(src, out); print("no stickers, copied"); return
+        if not cut:
+            shutil.copyfile(src, out); print("no stickers, no trim, copied"); return
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src, *cut, *enc, *aud, out], check=True)
+        print(f"trimmed {tr.get('trim_in') or 0}-{tr.get('trim_out')} -> {out}"); return
     d = tempfile.mkdtemp()
     open(f"{d}/s.html", "w").write(page(texts))
     subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
@@ -39,9 +51,8 @@ def main():
                     f"--screenshot={d}/s.png", f"file://{d}/s.html"], check=True, capture_output=True)
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-i", f"{d}/s.png", "-filter_complex",
                     "[1:v][0:v]scale2ref=w=main_w:h=main_h[s][v];[v][s]overlay=0:0:format=auto",  # stretches the 1080x1920 layer to the video size
-                    "-c:v", "libx264", "-crf", "17", "-preset", "medium", "-pix_fmt", "yuv420p", "-c:a", "copy",
-                    "-movflags", "+faststart", out], check=True)
-    print(f"baked {len(texts)} sticker(s) -> {out}")
+                    *cut, *enc, *aud, out], check=True)
+    print(f"baked {len(texts)} sticker(s)" + (f", trimmed {tr.get('trim_in') or 0}-{tr.get('trim_out')}" if cut else "") + f" -> {out}")
 
 if __name__ == "__main__":
     main()

@@ -387,6 +387,23 @@ async function route(req, env, ctx) {
       id, post.current_version_id, f.text, f.style || 'white-box', f.x ?? 50, f.y ?? 50, f.width_pct ?? 80, f.font_px_at_1080 ?? 72, f.rotation ?? 0);
     return json({ text: t });
   }
+  // trim a story (stories view): only the current version, from in to out seconds; reset clears it
+  if ((m = p.match(/^\/api\/posts\/(\d+)\/trim$/)) && method === 'POST') {
+    const id = +m[1], b = await body();
+    const post = await one(env.DB, 'SELECT current_version_id FROM posts WHERE id = ? AND deleted_at IS NULL', id);
+    if (!post || !post.current_version_id) return err('not_found', 404);
+    let tin = null, tout = null;
+    if (!b.reset) {
+      tin = clampN(b.in, 0, 36000); tout = clampN(b.out, 0, 36000);
+      if (tin === undefined || tout === undefined) return err('bad_trim');
+      tin = Math.round(tin * 10) / 10; tout = Math.round(tout * 10) / 10;
+      if (tout - tin < 0.95) return err('too_short');
+      if (tin < 0.05) tin = null;
+    }
+    await env.DB.prepare('UPDATE versions SET trim_in = ?, trim_out = ? WHERE id = ?').bind(tin, tout, post.current_version_id).run();
+    await addEvent(env, 'trimmed', { post_id: id, actor, body: b.reset ? 'reset' : `${tin || 0}-${tout}` });
+    return json({ version_id: post.current_version_id, trim_in: tin, trim_out: tout });
+  }
   if ((m = p.match(/^\/api\/texts\/(\d+)$/))) {
     const id = +m[1];
     if (method === 'DELETE') { await env.DB.prepare('DELETE FROM story_texts WHERE id = ?').bind(id).run(); return json({ ok: true }); }
@@ -512,7 +529,7 @@ async function shareView(env, settings, sh) {
       const v = withToken(x.version, sh.token);
       return {
         id: x.id, title: x.title, cover_url: x.cover_url,
-        version: v && { id: v.id, mp4: v.mp4, hls: v.hls, thumb: v.thumb, duration: v.duration },
+        version: v && { id: v.id, mp4: v.mp4, hls: v.hls, thumb: v.thumb, duration: v.duration, trim_in: v.trim_in, trim_out: v.trim_out },
         texts: x.texts.map((t) => ({ id: t.id, text: t.text, style: t.style, x: t.x, y: t.y, width_pct: t.width_pct, font_px_at_1080: t.font_px_at_1080, rotation: t.rotation })),
       };
     }),
@@ -723,13 +740,17 @@ async function agentRoutes(req, env, settings, p, body) {
     const everything = urlOf(req).searchParams.get('all') === '1';
     const kind = urlOf(req).searchParams.get('kind');
     const rows = await all(env.DB, `SELECT p.id, p.title, p.kind, p.client_id, c.name AS client_name, p.stage, p.scheduled_at, p.caption, p.updated_at,
-        p.current_version_id AS version_id, v.n AS version_n, v.bunny_guid, v.duration, v.width, v.height
+        p.current_version_id AS version_id, v.n AS version_n, v.bunny_guid, v.duration, v.width, v.height, v.trim_in, v.trim_out
       FROM posts p JOIN clients c ON c.id = p.client_id LEFT JOIN versions v ON v.id = p.current_version_id
       WHERE p.video_state = 'approved' AND p.deleted_at IS NULL ${everything ? '' : "AND p.stage NOT IN ('scheduled','published')"} ${kind ? 'AND p.kind = ?' : ''}
       ORDER BY p.client_id, p.id`, ...(kind ? [kind] : []));
     const origin = urlOf(req).origin;
     const texts = rows.length ? await all(env.DB, `SELECT * FROM story_texts WHERE post_id IN (${rows.map(() => '?').join(',')}) ORDER BY id`, ...rows.map((r) => r.id)).catch(() => []) : [];
     return json({ posts: rows.map((r) => ({ ...r, download_url: downloadUrl(settings, origin, r.bunny_guid, r.height), texts: texts.filter((t) => t.post_id === r.id && (t.version_id == null || t.version_id === r.version_id)) })) });
+  }
+  if ((m = p.match(/^\/posts\/(\d+)\/trim$/)) && method === 'GET') {
+    const r = await one(env.DB, 'SELECT p.id AS post_id, v.id AS version_id, v.trim_in, v.trim_out, v.duration FROM posts p LEFT JOIN versions v ON v.id = p.current_version_id WHERE p.id = ?', +m[1]);
+    return r ? json(r) : err('not_found', 404);
   }
   if ((m = p.match(/^\/posts\/(\d+)\/texts$/)) && method === 'GET') {
     const post = await one(env.DB, 'SELECT current_version_id FROM posts WHERE id = ?', +m[1]);
