@@ -17,7 +17,7 @@ STYLES = {"white-box": "background:#fff;color:#000;", "black-box": "background:#
 
 def page(texts):
     items = "".join(
-        f'<div class="t" style="left:{t["x"]}%;top:{t["y"]}%;font-size:{t["font_px_at_1080"]}px;'
+        f'<div class="t" style="left:{t["x"]}%;top:{t["y"]}%;font-size:{t["font_px_at_1080"]}px;transform:translate(-50%,-50%) rotate({t.get("rotation") or 0}deg);'
         f'max-width:{t.get("width_pct") or 80}%;color:{COLOR.get(t.get("style"), "#000")}"><span style="{STYLES.get(t.get("style"), STYLES["white-box"])}">{html.escape(t["text"])}</span></div>'
         for t in texts)
     return f"""<!doctype html><meta charset=utf-8>
@@ -27,6 +27,23 @@ def page(texts):
 font-family:Heebo,sans-serif;font-weight:800;line-height:1.4;text-align:center;white-space:pre-line;overflow-wrap:anywhere;direction:rtl}}
 .t>span{{padding:0 .42em;border-radius:.3em;-webkit-box-decoration-break:clone;box-decoration-break:clone}}</style>
 <body>{items}</body>"""
+
+def video_size(src):
+    """Displayed width/height (after the phone's rotation flag, which ffmpeg applies)."""
+    st = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                              "stream=width,height:stream_side_data=rotation", "-of", "json", src]))["streams"][0]
+    w, h = st["width"], st["height"]
+    rot = next((abs(int(d.get("rotation", 0))) for d in st.get("side_data_list", []) if "rotation" in d), 0)
+    return (h, w) if rot % 180 == 90 else (w, h)
+
+def sticker_box(w, h):
+    """Where the stories view's 9:16 frame sits on the video: the video fills it with object-fit: cover,
+    so a wider video is cropped left/right and a taller one top/bottom. Returns (bw, bh, x, y) in video pixels."""
+    if w * 16 > h * 9:
+        bw, bh = round(h * 9 / 16), h
+    else:
+        bw, bh = w, round(w * 16 / 9)
+    return bw, bh, (w - bw) // 2, (h - bh) // 2
 
 def main():
     post, src, out = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -49,8 +66,11 @@ def main():
     subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
                     "--default-background-color=00000000", "--window-size=1080,1920", "--virtual-time-budget=4000",
                     f"--screenshot={d}/s.png", f"file://{d}/s.html"], check=True, capture_output=True)
+    # the 1080x1920 layer is the stories view's 9:16 frame: scale it to that frame on the video (explicit sizes:
+    # scale2ref's main_w changed meaning in ffmpeg 8 and left the layer unscaled, off-centre on a 720p video)
+    bw, bh, bx, by = sticker_box(*video_size(src))
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-i", f"{d}/s.png", "-filter_complex",
-                    "[1:v][0:v]scale2ref=w=main_w:h=main_h[s][v];[v][s]overlay=0:0:format=auto",  # stretches the 1080x1920 layer to the video size
+                    f"[1:v]scale={bw}:{bh}:flags=lanczos,format=rgba[s];[0:v][s]overlay={bx}:{by}:format=auto",
                     *cut, *enc, *aud, out], check=True)
     print(f"baked {len(texts)} sticker(s)" + (f", trimmed {tr.get('trim_in') or 0}-{tr.get('trim_out')}" if cut else "") + f" -> {out}")
 
