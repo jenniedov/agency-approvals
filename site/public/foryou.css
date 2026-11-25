@@ -366,7 +366,7 @@ body.land .card-video .land-acts { display: flex; flex-direction: column; align-
 body.sheet-open .fy-toast { bottom: calc(var(--kb) + 50dvh); }
 
 /* ---------- confirm (iOS dark alert) ---------- */
-.fy-modal { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 24px; }
+.fy-modal { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; }
 .fy-modal-back { position: absolute; inset: 0; background: rgba(0, 0, 0, .6); opacity: 0; transition: opacity .2s; }
 .fy-modal-box { position: relative; width: min(280px, 100%); border-radius: 14px; background: var(--fy-sheet); text-align: center; overflow: hidden; transform: scale(1.1); opacity: 0; transition: transform .2s var(--ease), opacity .2s; }
 .fy-modal.in .fy-modal-back { opacity: 1; }
@@ -644,3 +644,5 @@ body.land .sheet-x { display: grid; }
   .burst { animation: fy-fade 1s linear forwards !important; animation-duration: 1s !important; }
   @keyframes fy-fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 }
+
+.mo-row.bad, .mo-row.bad .mo-ic { color: var(--fy-danger); }

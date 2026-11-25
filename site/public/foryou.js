@@ -139,7 +139,7 @@
     toastTimer = setTimeout(() => t.classList.remove('show'), opt.ms || (opt.action ? 4500 : 2200));
   }
 
-  function confirmBox({ title, text, ok = 'אישור', cancel = 'ביטול', danger = false }) {
+  function confirmBox({ title, text, ok = 'אישור', cancel = 'ביטול', danger = false, alt = null }) {
     return new Promise((resolve) => {
       const done = (v) => { S.modal = null; wrap.classList.remove('in'); setTimeout(() => wrap.remove(), 200); resolve(v); };
       const okBtn = h('button', { type: 'button', class: 'al-btn ' + (danger ? 'danger' : 'strong'), onclick: () => done(true) }, ok);
@@ -148,6 +148,7 @@
         h('div', { class: 'fy-modal-box' },
           h('div', { class: 'al-text' }, h('h2', {}, title), text ? h('p', {}, text) : null),
           okBtn,
+          alt ? h('button', { type: 'button', class: 'al-btn ' + (danger ? 'danger' : 'strong'), onclick: () => done('alt') }, alt) : null,
           h('button', { type: 'button', class: 'al-btn', onclick: () => done(false) }, cancel)));
       document.body.append(wrap);
       S.modal = { close: () => done(false) };
@@ -1041,6 +1042,9 @@
     if (back) back._userPaused = false;
     const ok = FYStories.open({
       sets: S.stories, client: clientId, post: postId, api, video: P.el, muted: S.muted, gesture,
+      // Escape: back to the reels behind, or home when there are none
+      onEscape: () => { if (S.groups.length) FYStories.close(); else location.href = '/'; },
+      onDelete: deleteStory,
       onMute: (m) => { S.muted = m; S.forcedMute = false; store.set('muted', m); },
       onClose: () => {
         renderRings();
@@ -1643,6 +1647,7 @@
           part === 'cover' ? row('x', 'הכיתוב לא מאושר', () => rejectPart(post, 'caption', true)) : null,
           row('pencil', 'שינוי כיתוב', () => openCaptionEdit(post)),
           cur !== 'pending' ? row('undo', 'החזרה להמתנה', () => setState(post, part, 'pending')) : null),
+        h('div', { class: 'mo-group' }, (() => { const r = row('trash', 'מחיקת הסרטון', () => askDeleteVideo(post)); r.classList.add('bad'); return r; })()),
         h('div', { class: 'mo-group' },
           row('clean', 'מסך נקי', () => setClean(true)),
           row('side', railSide() === 'left' ? 'הכפתורים בצד ימין' : 'הכפתורים בצד שמאל', () => { const n = railSide() === 'left' ? 'right' : 'left'; store.set('railSide', n); setRail(n); }),
@@ -1650,6 +1655,38 @@
           row(P.el.muted ? 'vol' : 'mute', P.el.muted ? 'הפעלת שמע' : 'השתקה', () => setMuted(!P.el.muted))),
         isTouch ? null : h('p', { class: 'sec-hint center' }, 'במקלדת: חיצים למעבר, רווח לעצירה, M לשמע')),
     });
+  }
+
+  /* delete = hidden from every screen (soft: Claude can bring it back with agent.py restore-post) */
+  async function deletePosts(posts, what) {
+    try { for (const p of posts) await api('/api/posts/' + p.id, { method: 'DELETE' }); }
+    catch (e) { toast('לא הצלחנו למחוק. אפשר לנסות שוב'); return false; }
+    try { sessionStorage.setItem('fy-deleted', what === 'video' ? 'הסרטון נמחק' : posts.length > 1 ? posts.length + ' סטוריז נמחקו' : 'הסטורי נמחק'); } catch (e) {}
+    location.replace('/foryou');
+    return true;
+  }
+  async function askDeleteVideo(post) {
+    if (await confirmBox({ title: 'למחוק את הסרטון?', text: 'הוא ייעלם ממסך האישורים ומכל המסכים. אם תתחרטי, קלוד יכול להחזיר.', ok: 'מחיקה', danger: true })) deletePosts([post], 'video');
+  }
+  // the stories of one series: same client, each made within 3 hours of the one before (like the home screen)
+  function seriesOf(posts, post) {
+    const t = (p) => Date.parse(String(p.created_at || '').replace(' ', 'T') + 'Z') || 0;
+    const sorted = posts.slice().sort((a, b) => t(a) - t(b) || a.id - b.id);
+    const runs = [];
+    sorted.forEach((p, n) => { if (!n || t(p) - t(sorted[n - 1]) > 3 * 3600e3) runs.push([]); runs[runs.length - 1].push(p); });
+    return runs.find((r) => r.includes(post)) || [post];
+  }
+  async function deleteStory({ post, set }) {
+    const series = seriesOf(set.posts, post);
+    const ans = await confirmBox({
+      title: 'למחוק את הסטורי?',
+      text: 'זה ייעלם מכל המסכים. אם תתחרטי, קלוד יכול להחזיר.',
+      ok: series.length > 1 ? 'רק את הסטורי הזה' : 'מחיקה',
+      alt: series.length > 1 ? 'את כל ' + series.length + ' הסטוריז בסדרה' : null,
+      danger: true,
+    });
+    if (!ans) return false;
+    return deletePosts(ans === 'alt' ? series : [post], 'story');
   }
 
   /* client switcher (from the title or the avatar chip) */
@@ -1679,9 +1716,9 @@
      Keyboard (desktop)
      ================================================================ */
   document.addEventListener('keydown', (e) => {
-    if (window.FYStories && FYStories.isOpen()) return; // the stories screen has its own keys
+    if (window.FYStories && FYStories.isOpen()) { if (S.modal && e.key === 'Escape') S.modal.close(); return; } // the stories screen has its own keys; a confirm box on top closes with Escape
     if (e.target.closest && e.target.closest('input, textarea, [contenteditable]')) { if (e.key === 'Escape') e.target.blur(); return; }
-    if (e.key === 'Escape') { if (S.pop) closePop(); else if (S.modal) S.modal.close(); else if (S.sheet) closeSheet(); else if (S.clean) setClean(false); return; }
+    if (e.key === 'Escape') { if (S.pop) closePop(); else if (S.modal) S.modal.close(); else if (S.sheet) closeSheet(); else if (S.clean) setClean(false); else location.href = '/'; return; }
     if (S.modal || S.pop) return;
     const k = e.key;
     if (S.sheet) {
@@ -1708,6 +1745,7 @@
      Boot
      ================================================================ */
   async function boot() {
+    try { const d = sessionStorage.getItem('fy-deleted'); if (d) { sessionStorage.removeItem('fy-deleted'); setTimeout(() => toast(d), 400); } } catch (e) {}
     P.el = makeVideo();
     syncMute(); setSpeed(S.speed); syncLand();
     try {

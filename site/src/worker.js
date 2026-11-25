@@ -45,7 +45,7 @@ async function expandPosts(env, settings, posts) {
       ...p,
       music: p.music ? safeParse(p.music) : null,
       platforms: p.platforms ? safeParse(p.platforms) : null,
-      version: cur ? { ...cur, ...bunny.playback(settings, cur.bunny_guid, short) } : null,
+      version: cur ? withPoster({ ...cur, ...bunny.playback(settings, cur.bunny_guid, short) }) : null,
       versions: vs.map((v) => ({ id: v.id, n: v.n, note: v.note, created_at: v.created_at })),
       cover_options: covers.filter((o) => o.post_id === p.id).map((o) => ({ id: o.id, url: `/cover/${o.token}.jpg`, note: o.note, chosen: !!o.chosen, created_at: o.created_at })),
       comments: comments.filter((c) => c.post_id === p.id).map((c) => ({ ...c, drawing: c.drawing ? safeParse(c.drawing) : null })),
@@ -65,7 +65,7 @@ function textFields(b) {
   }
   return o;
 }
-const POST_SQL = 'SELECT p.*, c.name AS client_name FROM posts p JOIN clients c ON c.id = p.client_id';
+const POST_SQL = 'SELECT p.*, c.name AS client_name FROM posts p JOIN clients c ON c.id = p.client_id AND p.deleted_at IS NULL'; // deleted posts never show
 
 async function postById(env, settings, id) {
   const p = await one(env.DB, `${POST_SQL} WHERE p.id = ?`, +id);
@@ -139,15 +139,15 @@ async function route(req, env, ctx) {
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     return new Response(bytes, { headers: { 'content-type': (head.match(/data:([^;]+)/) || [])[1] || 'image/jpeg', 'cache-control': 'public, max-age=31536000, immutable' } });
   }
-  if ((m = p.match(/^\/media\/(r2-[\w-]+)\.mp4$/)) && (method === 'GET' || method === 'HEAD')) {
-    // R2 video: a logged-in team member, or an end-client share link whose client owns a post with this video
+  if ((m = p.match(/^\/media\/(r2-[\w-]+)\.(mp4|jpg)$/)) && (method === 'GET' || method === 'HEAD')) {
+    // R2 video (or its first-frame poster): a logged-in team member, or an end-client share link whose client owns a post with this video
     let ok = !!(await readSession(env, req).catch(() => null));
     const t = url.searchParams.get('t');
     if (!ok && t) ok = !!(await one(env.DB, 'SELECT 1 AS y FROM versions v JOIN posts po ON po.id = v.post_id JOIN clients c ON c.id = po.client_id WHERE v.bunny_guid = ? AND c.share_token = ? AND c.archived = 0', m[1], t));
     // a story-share link: only the current version of a post that is in that share
     if (!ok && t) ok = await shareAllowsGuid(env, t, m[1]);
     if (!ok) return new Response('login', { status: 403 });
-    return serveMedia(env, req, m[1]);
+    return serveMedia(env, req, m[1], m[2] === 'jpg' ? posterKey(m[1]) : mediaKey(m[1]));
   }
   if (!p.startsWith('/api/')) return env.ASSETS.fetch(req);
 
@@ -276,7 +276,7 @@ async function route(req, env, ctx) {
     const [clients, counts, notifications, unread, machine, week] = await Promise.all([
       all(env.DB, 'SELECT * FROM clients WHERE archived = 0 ORDER BY sort, name'),
       all(env.DB, `SELECT client_id, SUM(stage='review') AS review, SUM(stage='client') AS client, SUM(stage='approved') AS approved,
-                   SUM(video_state='changes' OR caption_state='changes' OR cover_state='changes' OR client_state='changes') AS changes FROM posts GROUP BY client_id`),
+                   SUM(video_state='changes' OR caption_state='changes' OR cover_state='changes' OR client_state='changes') AS changes FROM posts WHERE deleted_at IS NULL GROUP BY client_id`),
       all(env.DB, 'SELECT e.*, c.name AS client_name, p.title AS post_title FROM events e LEFT JOIN clients c ON c.id = e.client_id LEFT JOIN posts p ON p.id = e.post_id ORDER BY e.id DESC LIMIT 40'),
       one(env.DB, 'SELECT COUNT(*) AS n FROM events WHERE read_at IS NULL'),
       one(env.DB, 'SELECT * FROM machines ORDER BY last_seen DESC LIMIT 1'),
@@ -334,6 +334,12 @@ async function route(req, env, ctx) {
       if (!sets.length) return err('nothing');
       await env.DB.prepare(`UPDATE posts SET ${sets.join(',')}, updated_at=datetime('now') WHERE id=?`).bind(...vals, id).run();
       return json({ post: await postById(env, settings, id) });
+    }
+    if (method === 'DELETE') {
+      // soft delete: gone from every screen and from the agent's lists; `agent.py restore-post <id>` brings it back
+      if (user.role !== 'owner') return err('owner_only', 403);
+      await env.DB.prepare("UPDATE posts SET deleted_at=datetime('now'), updated_at=datetime('now') WHERE id=? AND deleted_at IS NULL").bind(id).run();
+      return json({ ok: true });
     }
   }
   if ((m = p.match(/^\/api\/posts\/(\d+)\/state$/)) && method === 'POST') {
@@ -461,9 +467,16 @@ async function route(req, env, ctx) {
 const urlOf = (req) => new URL(req.url);
 const isBunny = (guid) => !!guid && !guid.startsWith('demo-') && !guid.startsWith('r2-');
 const mediaKey = (guid) => `video/${guid}.mp4`;
+const posterKey = (guid) => `video/${guid}.jpg`;
+// an R2 video whose first frame the Mac uploaded: that frame is its thumbnail
+function withPoster(v) {
+  if (v && !v.thumb && v.poster && String(v.bunny_guid || '').startsWith('r2-')) return { ...v, thumb: `/media/${v.bunny_guid}.jpg` };
+  return v;
+}
 function withToken(version, token) {
   if (!version || !String(version.bunny_guid || '').startsWith('r2-')) return version;
-  return { ...version, mp4: (version.mp4 || []).map((u) => `${u}?t=${encodeURIComponent(token)}`) };
+  const t = `?t=${encodeURIComponent(token)}`;
+  return { ...version, mp4: (version.mp4 || []).map((u) => u + t), thumb: version.thumb && version.thumb.startsWith('/media/') ? version.thumb + t : version.thumb };
 }
 function downloadUrl(settings, origin, guid, height) {
   if (!guid) return null;
@@ -577,7 +590,7 @@ async function agentRoutes(req, env, settings, p, body) {
   }
   if (p === '/inbox' && method === 'GET') {
     const comments = await all(env.DB, `SELECT cm.*, p.title AS post_title, p.client_id, c.name AS client_name, v.n AS version_n
-      FROM comments cm JOIN posts p ON p.id = cm.post_id JOIN clients c ON c.id = p.client_id LEFT JOIN versions v ON v.id = cm.version_id
+      FROM comments cm JOIN posts p ON p.id = cm.post_id AND p.deleted_at IS NULL JOIN clients c ON c.id = p.client_id LEFT JOIN versions v ON v.id = cm.version_id
       WHERE cm.status = 'open' ORDER BY p.client_id, cm.post_id, COALESCE(cm.at_sec, 1e9)`);
     const changes = await all(env.DB, `${POST_SQL} WHERE p.video_state='changes' OR p.caption_state='changes' OR p.cover_state='changes' OR p.client_state='changes' ORDER BY p.id`);
     return json({ comments, changes });
@@ -588,6 +601,10 @@ async function agentRoutes(req, env, settings, p, body) {
   }
   if (p === '/clients' && method === 'GET') {
     return json({ clients: (await all(env.DB, 'SELECT * FROM clients ORDER BY sort, name')).map((c) => clientOut(req, c)) });
+  }
+  if ((m = p.match(/^\/posts\/(\d+)\/restore$/)) && method === 'POST') {
+    await env.DB.prepare("UPDATE posts SET deleted_at=NULL, updated_at=datetime('now') WHERE id=?").bind(+m[1]).run();
+    return json({ post: await postById(env, settings, +m[1]) });
   }
   if (p === '/posts' && method === 'POST') {
     const b = await body();
@@ -686,6 +703,21 @@ async function agentRoutes(req, env, settings, p, body) {
   if ((m = p.match(/^\/media\/(r2-[\w-]+)\.mp4$/)) && (method === 'GET' || method === 'HEAD')) {
     return serveMedia(env, req, m[1]);
   }
+  if ((m = p.match(/^\/r2\/poster\/(r2-[\w-]+)$/)) && method === 'PUT') {
+    // first frame of an R2 video (JPEG from ffmpeg on the Mac), shown as its thumbnail everywhere
+    if (!env.MEDIA) return err('r2_not_bound', 409);
+    const bytes = await req.arrayBuffer();
+    if (!bytes.byteLength || bytes.byteLength > 3 * 1024 * 1024) return err('size');
+    const n = await one(env.DB, 'SELECT COUNT(*) AS n FROM versions WHERE bunny_guid = ?', m[1]);
+    if (!n || !n.n) return err('no_version', 404);
+    await env.MEDIA.put(posterKey(m[1]), bytes, { httpMetadata: { contentType: 'image/jpeg' } });
+    await env.DB.prepare('UPDATE versions SET poster = 1 WHERE bunny_guid = ?').bind(m[1]).run();
+    return json({ ok: true, thumb: `/media/${m[1]}.jpg` });
+  }
+  if (p === '/r2/missing-posters' && method === 'GET') {
+    const rows = await all(env.DB, "SELECT v.id, v.post_id, v.bunny_guid FROM versions v WHERE v.bunny_guid LIKE 'r2-%' AND COALESCE(v.poster, 0) = 0 ORDER BY v.id");
+    return json({ versions: rows });
+  }
   if (p === '/approved' && method === 'GET') {
     // posts whose video is approved and that are not scheduled or out yet (?all=1: every approved video)
     const everything = urlOf(req).searchParams.get('all') === '1';
@@ -693,7 +725,7 @@ async function agentRoutes(req, env, settings, p, body) {
     const rows = await all(env.DB, `SELECT p.id, p.title, p.kind, p.client_id, c.name AS client_name, p.stage, p.scheduled_at, p.caption, p.updated_at,
         p.current_version_id AS version_id, v.n AS version_n, v.bunny_guid, v.duration, v.width, v.height
       FROM posts p JOIN clients c ON c.id = p.client_id LEFT JOIN versions v ON v.id = p.current_version_id
-      WHERE p.video_state = 'approved' ${everything ? '' : "AND p.stage NOT IN ('scheduled','published')"} ${kind ? 'AND p.kind = ?' : ''}
+      WHERE p.video_state = 'approved' AND p.deleted_at IS NULL ${everything ? '' : "AND p.stage NOT IN ('scheduled','published')"} ${kind ? 'AND p.kind = ?' : ''}
       ORDER BY p.client_id, p.id`, ...(kind ? [kind] : []));
     const origin = urlOf(req).origin;
     const texts = rows.length ? await all(env.DB, `SELECT * FROM story_texts WHERE post_id IN (${rows.map(() => '?').join(',')}) ORDER BY id`, ...rows.map((r) => r.id)).catch(() => []) : [];
@@ -743,7 +775,14 @@ async function jobWithFiles(env, id, filesUrl) {
   const job = await one(env.DB, 'SELECT * FROM jobs WHERE id = ?', +id);
   if (!job) return null;
   const files = await all(env.DB, 'SELECT * FROM job_files WHERE job_id = ? ORDER BY id', job.id);
-  return { ...job, files: files.map((f) => ({ id: f.id, role: f.role, name: f.name, content_type: f.content_type, size: f.size, state: f.state, transcript: f.transcript, transcript_state: f.transcript_state, url: filesUrl(job.id, f.id) })) };
+  let posts = [];
+  const parsed = job.post_ids ? safeParse(job.post_ids) : null;
+  const ids = (Array.isArray(parsed) ? parsed : []).map(Number).filter(Boolean);
+  if (ids.length) {
+    const rows = await all(env.DB, `SELECT id, kind, client_id, title, video_state FROM posts WHERE deleted_at IS NULL AND id IN (${ids.map(() => '?').join(',')}) ORDER BY id`, ...ids);
+    posts = ids.map((i) => rows.find((r) => r.id === i)).filter(Boolean);
+  }
+  return { ...job, post_ids: undefined, posts, had_posts: ids.length > 0, files: files.map((f) => ({ id: f.id, role: f.role, name: f.name, content_type: f.content_type, size: f.size, state: f.state, transcript: f.transcript, transcript_state: f.transcript_state, url: filesUrl(job.id, f.id) })) };
 }
 const uiFileUrl = (jid, fid) => `/api/jobs/${jid}/files/${fid}/media`;
 
@@ -785,7 +824,10 @@ async function jobRoutes(req, env, user, p, body) {
   if (p === '' && method === 'GET') {
     const jobs = await all(env.DB, "SELECT * FROM jobs WHERE status != 'draft' ORDER BY id DESC LIMIT 30");
     const files = jobs.length ? await all(env.DB, `SELECT id, job_id, role, name, content_type, size, state, transcript, transcript_state FROM job_files WHERE job_id IN (${jobs.map(() => '?').join(',')}) ORDER BY id`, ...jobs.map((j) => j.id)) : [];
-    return json({ jobs: jobs.map((j) => ({ ...j, files: files.filter((f) => f.job_id === j.id).map((f) => ({ ...f, url: uiFileUrl(j.id, f.id) })) })) });
+    const idsOf = (j) => { const v = j.post_ids ? safeParse(j.post_ids) : null; return (Array.isArray(v) ? v : []).map(Number).filter(Boolean); };
+    const allIds = [...new Set(jobs.flatMap(idsOf))];
+    const prow = allIds.length ? await all(env.DB, `SELECT id, kind, client_id, title, video_state FROM posts WHERE deleted_at IS NULL AND id IN (${allIds.map(() => '?').join(',')})`, ...allIds) : [];
+    return json({ jobs: jobs.map((j) => { const ids = idsOf(j); return { ...j, post_ids: undefined, had_posts: ids.length > 0, posts: ids.map((i) => prow.find((r) => r.id === i)).filter(Boolean), files: files.filter((f) => f.job_id === j.id).map((f) => ({ ...f, url: uiFileUrl(j.id, f.id) })) }; }) });
   }
   if (p === '' && method === 'POST') {
     const job = await one(env.DB, 'INSERT INTO jobs (created_by) VALUES (?) RETURNING id', user.id);
@@ -798,7 +840,7 @@ async function jobRoutes(req, env, user, p, body) {
 
   if (rest === '' && method === 'GET') return json({ job: await jobWithFiles(env, id, uiFileUrl) });
   if (rest === '' && method === 'DELETE') {
-    if (job.status !== 'draft') return err('already_sent', 409);
+    // a draft (cancel) or any sent job she no longer wants: its uploaded files go too
     const files = await all(env.DB, 'SELECT * FROM job_files WHERE job_id = ?', id);
     for (const f of files) await dropFile(env, f);
     await env.DB.batch([env.DB.prepare('DELETE FROM job_files WHERE job_id = ?').bind(id), env.DB.prepare('DELETE FROM jobs WHERE id = ?').bind(id)]);
@@ -910,6 +952,7 @@ async function agentJobRoutes(req, env, settings, p, body) {
     const j = await one(env.DB, 'SELECT * FROM jobs WHERE id = ?', id);
     if (!j || j.status === 'draft') return err('not_found', 404);
     const note = b.note === undefined ? j.status_note : (b.note ? String(b.note).slice(0, 4000) : null);
+    if (Array.isArray(b.posts)) await env.DB.prepare('UPDATE jobs SET post_ids=? WHERE id=?').bind(JSON.stringify(b.posts.map(Number).filter(Boolean).slice(0, 50)), id).run();
     await env.DB.prepare(`UPDATE jobs SET status=?, status_note=?, ${b.status === 'working' ? "picked_at=COALESCE(picked_at, datetime('now'))," : ''}${b.status === 'done' ? "done_at=datetime('now')," : ''} updated_at=datetime('now') WHERE id=?`).bind(b.status, note, id).run();
     if (b.status !== j.status && b.status !== 'new') await addEvent(env, 'job_' + b.status, { actor: 'claude', body: (note || j.text || '').slice(0, 200) || null });
     return json({ job: await jobWithFiles(env, id, agentUrl) });

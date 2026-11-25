@@ -66,6 +66,14 @@
     return new URLSearchParams(i >= 0 ? location.hash.slice(i + 1) : '');
   }
   function thumbOf(p) { return (p.version && p.version.thumb) || p.cover_url || ''; }
+  // the cover, or when there is none yet, the video's own first frame
+  function coverHtml(p, empty) {
+    var th = safeUrl(thumbOf(p));
+    if (th) return '<img src="' + th + '" alt="" loading="lazy">';
+    var mp4 = safeUrl(p.version && p.version.mp4 && p.version.mp4[0]);
+    if (mp4) return '<video src="' + mp4 + '#t=0.1" muted playsinline preload="metadata" aria-hidden="true" tabindex="-1"></video>';
+    return empty || '';
+  }
   function isWide(p) { return p.orientation === 'horizontal'; }
   function foryou(id) { return '/foryou' + (id != null ? '?post=' + encodeURIComponent(id) : ''); }
   function machineInfo(m) {
@@ -314,6 +322,21 @@
   var renderToken = 0;
   function guard(token) { return token === renderToken; }
 
+  /* Newest first, in context: a story series (one client's stories uploaded close together) is one unit,
+     ranked by its newest story but kept in order from its FIRST story; every other video is a unit of its own. */
+  function newestFirst(list) {
+    function when(p) { var a = p.created_at || '', b = (p.version && p.version.created_at) || ''; return a > b ? a : b; }
+    var units = [], series = {};
+    list.slice().sort(function (x, y) { return x.p.id - y.p.id; }).forEach(function (w) {
+      var p = w.p;
+      if (p.kind !== 'story') { units.push({ items: [w], at: when(p) }); return; }
+      var cur = series[p.client_id], t = parseTime(p.created_at);
+      if (!cur || isNaN(t) || isNaN(cur.last) || t - cur.last > 3 * 3600000) { cur = series[p.client_id] = { items: [], at: '', last: t }; units.push(cur); }
+      cur.items.push(w); cur.last = t; if (when(p) > cur.at) cur.at = when(p);
+    });
+    return units.sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : b.items[0].p.id - a.items[0].p.id; });
+  }
+
   /* ---------------- page: today ---------------- */
   function pageToday(token) {
     loading([48, 110, 240, 200]);
@@ -322,6 +345,11 @@
       var ov = res[0], feed = res[1];
       var waiting = [];
       (feed.groups || []).forEach(function (g) { (g.posts || []).forEach(function (p) { waiting.push({ p: p, c: g.client }); }); });
+      var units = newestFirst(waiting);
+      waiting = [].concat.apply([], units.map(function (u) { return u.items; }));
+      var start = units[0] && units[0].items[0];
+      var startHref = !start ? '/foryou' : start.p.kind === 'story'
+        ? '/foryou?stories=' + encodeURIComponent(start.p.client_id) + '&post=' + encodeURIComponent(start.p.id) : foryou(start.p.id);
       var n = waiting.length;
       var changes = (ov.clients || []).reduce(function (s, c) { return s + ((c.counts && c.counts.changes) || 0); }, 0);
       var now = new Date(), hr = now.getHours();
@@ -334,7 +362,7 @@
         '<h1>' + hello + (name ? ', ' + esc(name) : '') + '</h1><p class="muted">' + sub + '</p></header>';
 
       html += n
-        ? '<a class="hero-card" href="/foryou"><div class="hero-row"><div><div class="big">' + (n === 1 ? 'סרטון אחד מחכה לך' : n + ' סרטונים מחכים לך') + '</div>' +
+        ? '<a class="hero-card" href="' + esc(startHref) + '"><div class="hero-row"><div><div class="big">' + (n === 1 ? 'סרטון אחד מחכה לך' : n + ' סרטונים מחכים לך') + '</div>' +
           '<div class="sub">לצפות, להעיר ולאשר ברצף</div></div>' +
           '<div class="hero-num" aria-hidden="true"><span class="n">' + (n < 10 ? '0' + n : n) + '</span><span class="fy">for you</span></div></div>' +
           '<span class="go">להתחיל ' + icon('arrow').replace('<svg', '<svg width="18" height="18"') + '</span></a>'
@@ -344,10 +372,10 @@
         html += '<section class="section" aria-labelledby="h-wait"><div class="section-head"><h2 id="h-wait">מחכה לאישור שלך</h2>' +
           (changes ? '<span class="en-i" aria-label="' + n + ' מתוך ' + (n + changes) + '">' + n + ' of ' + (n + changes) + '</span>' : '') + '</div><div class="thumbs">' +
           waiting.map(function (w) {
-            var p = w.p, th = safeUrl(thumbOf(p));
+            var p = w.p;
             var meta = p.version ? 'גרסה ' + esc(p.version.n) : '';
             return '<a class="thumb' + (isWide(p) ? ' wide' : '') + '" href="' + foryou(p.id) + '"><div class="frame' + (isWide(p) ? ' wide' : '') + '">' +
-              (th ? '<img src="' + th + '" alt="" loading="lazy">' : '<span>אין תמונה עדיין</span>') +
+              coverHtml(p, '<span>אין תמונה עדיין</span>') +
               (p.version && p.version.duration ? '<span class="len">' + fmtLen(p.version.duration) + '</span>' : '') + '</div>' +
               '<div class="t-client">' + esc((w.c && w.c.name) || p.client_name) + (meta ? ' · ' + meta : '') + '</div>' +
               '<div class="t-title">' + esc(p.title) + '</div></a>';
@@ -555,9 +583,9 @@
           var cards = posts.filter(function (p) { return p.stage === col.id || (col.id === 'scheduled' && p.stage === 'published'); });
           return '<section class="col' + (cards.length ? '' : ' is-empty') + '" aria-label="' + col.name + '"><div class="col-head"><h2>' + col.name + '</h2><span class="small muted">' + cards.length + '</span></div>' +
             (cards.length ? cards.map(function (p) {
-              var tg = cardTag(p), th = safeUrl(thumbOf(p));
+              var tg = cardTag(p);
               return '<a class="kcard" href="' + foryou(p.id) + '"><div class="frame' + (isWide(p) ? ' wide' : '') + '">' +
-                (th ? '<img src="' + th + '" alt="" loading="lazy">' : '<span>פריים</span>') + '</div>' +
+                coverHtml(p, '<span>פריים</span>') + '</div>' +
                 '<div class="k-body"><div class="k-title">' + esc(p.title) + '</div><div class="k-meta">' + esc(cardMeta(p)) + '</div>' +
                 '<span class="tag ' + tg[0] + '">' + tg[1] + '</span></div></a>';
             }).join('') : '<div class="col-empty">אין כאן כלום כרגע</div>') + '</section>';
@@ -633,9 +661,9 @@
         return '<section class="card" aria-labelledby="feed-' + esc(c.id) + '"><div class="head"><h2 id="feed-' + esc(c.id) + '">הפיד של ' + esc(c.name) + '</h2>' +
           '<p class="small muted">ככה הוא ייראה אחרי השבוע הזה</p></div>' +
           (ps.length ? '<div class="feed-grid">' + ps.map(function (p) {
-            var th = safeUrl(thumbOf(p)), plan = p.stage !== 'published';
+            var plan = p.stage !== 'published';
             return '<a class="feed-tile' + (plan ? ' plan' : '') + '" href="' + foryou(p.id) + '" aria-label="' + esc(p.title) + (plan ? ', עוד לא עלה' : '') + '">' +
-              (th ? '<img src="' + th + '" alt="" loading="lazy">' : '') + '<span>' + esc(p.title) + '</span></a>';
+              coverHtml(p) + '<span>' + esc(p.title) + '</span></a>';
           }).join('') + '</div><div class="legend" style="flex-direction:column;gap:4px"><span><i style="outline:3px solid var(--approve);outline-offset:-3px"></i>עוד לא עלה, מתוכנן</span><span><i style="background:var(--frame)"></i>כבר בפיד</span></div>'
             : '<div class="empty">עוד אין סרטונים בפיד</div>') + '</section>';
       }).join('') + '</div>';

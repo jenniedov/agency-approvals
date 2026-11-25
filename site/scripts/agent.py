@@ -24,6 +24,8 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
   agent.py revoke-share <token>           kills a share link
   agent.py download <post_id> [out.mp4]   the current version's file of a post
   agent.py mark-scheduled <post_id> [--at 2026-11-25T18:00:00+02:00]   stage → scheduled
+  agent.py restore-post <post_id>        bring back a post Jennie deleted on the site
+  agent.py backfill-posters               first-frame covers for R2 videos that have none (new uploads get one automatically)
   agent.py storage                        where videos go: {"bunny": bool, "r2": bool}
   agent.py caption <post_id> "<text>"
   agent.py cover-options <post_id> <img> [<img> …] [--note "..."]   cover options she picks from (make them with make_covers.py)
@@ -36,7 +38,7 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
   agent.py job <id>                       one job as JSON: text, files (role media|voice, name, size, state), voice transcripts.
                                           Voice notes without a transcript are transcribed now (site, else Scribe on this Mac)
   agent.py download-job <id> <dir>        every file of the job into <dir>, plus <dir>/job.json (text + transcripts)
-  agent.py job-status <id> working|done|new [--note "what I'm doing / what came out"]   she sees status + note on the site;
+  agent.py job-status <id> working|done|new [--note "what I'm doing / what came out"] [--posts 6,7,8]   she sees status + note on the site;
                                           working and done also ring her bell
   agent.py set-elevenlabs-key             copy ELEVENLABS_API_KEY from this Mac (env / jennie-edit-kit / video-use .env) into
                                           the site's encrypted settings, so the site transcribes voice notes itself. Never printed
@@ -111,7 +113,42 @@ def upload_r2(post_id, path, note=None):
     if not r.get("guid"):
         sys.exit(f"upload failed: {r}")
     out = call("POST", f"/posts/{post_id}/versions", {"bunny_guid": r["guid"], "duration": dur, "width": w, "height": h, "note": note})
+    put_poster(r["guid"], path)
     print(json.dumps(out, ensure_ascii=False))
+
+
+def put_poster(guid, video_path):
+    """R2 has no Bunny thumbnail: the first frame (at 0.1s) becomes the video's cover on the site."""
+    with tempfile.TemporaryDirectory() as d:
+        jpg = os.path.join(d, "poster.jpg")
+        res = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "0.1", "-i", video_path, "-frames:v", "1",
+                              "-vf", "scale='min(720,iw)':-2", "-q:v", "4", jpg], capture_output=True, text=True, timeout=120)
+        if res.returncode or not os.path.isfile(jpg):
+            print(f"poster: ffmpeg failed for {guid}: {res.stderr[-300:]}", file=sys.stderr)
+            return False
+        with open(jpg, "rb") as f:
+            call("PUT", f"/r2/poster/{guid}", raw=f.read(), ctype="image/jpeg")
+    print(f"poster: first frame set for {guid}", file=sys.stderr)
+    return True
+
+
+def backfill_posters():
+    """First-frame covers for R2 videos uploaded before posters existed."""
+    c = conf()
+    todo = call("GET", "/r2/missing-posters").get("versions", [])
+    print(f"{len(todo)} R2 version(s) without a poster", file=sys.stderr)
+    done = 0
+    for v in todo:
+        with tempfile.TemporaryDirectory() as d:
+            mp4 = os.path.join(d, "v.mp4")
+            try:
+                fetch_to(c["url"].rstrip("/") + f"/api/agent/media/{v['bunny_guid']}.mp4", mp4)
+            except Exception as e:
+                print(f"post {v['post_id']} version {v['id']}: download failed ({e})", file=sys.stderr)
+                continue
+            if put_poster(v["bunny_guid"], mp4):
+                done += 1
+    return {"posters_added": done, "of": len(todo)}
 
 
 def upload(post_id, path, note=None):
@@ -272,6 +309,11 @@ def main(a):
         caption = opt(a, "--caption")
         out = call("POST", "/posts", {"client_id": a[0], "title": a[1], "kind": kind, "caption": caption,
                                       "orientation": "horizontal" if kind == "long" else "vertical"})
+    elif cmd == "restore-post":
+        out = call("POST", f"/posts/{int(a[0])}/restore")["post"]
+        out = {k: out.get(k) for k in ("id", "title", "kind", "stage")}
+    elif cmd == "backfill-posters":
+        out = backfill_posters()
     elif cmd == "upload":
         note = opt(a, "--note")
         return upload(a[0], a[1], note)
@@ -362,8 +404,11 @@ def main(a):
         body = {"status": a[1]}
         if note is not None:
             body["note"] = note
+        posts = opt(a, "--posts")
+        if posts:
+            body["posts"] = [int(x) for x in posts.split(",") if x.strip()]
         out = call("POST", f"/jobs/{int(a[0])}/status", body)["job"]
-        out = {k: out.get(k) for k in ("id", "status", "status_note", "picked_at", "done_at")}
+        out = {k: out.get(k) for k in ("id", "status", "status_note", "picked_at", "done_at", "posts")}
     elif cmd == "set-elevenlabs-key":
         k = local_key()
         if not k:

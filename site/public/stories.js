@@ -145,12 +145,12 @@
     navPrev.addEventListener('click', () => prev());
     navNext.addEventListener('click', () => next());
     V.onKey = (e) => {
-      if (!V) return;
+      if (!V || document.querySelector('.fy-modal')) return; // a confirm box on top handles its own keys
       if (RO) { if (e.key === 'ArrowRight') { e.preventDefault(); next(); } else if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); } else if (e.key === ' ') { e.preventDefault(); togglePause(); } else if (e.key === 'm' || e.key === 'M') setMuted(!V.vid.muted); return; }
       if (V.editing) { if (e.key === 'Escape') { e.preventDefault(); V.finishEditor && V.finishEditor(); } return; }
       if (e.target === input) { if (e.key === 'Escape') { input.value = ''; root.classList.remove('has-text'); input.blur(); exitComment(); } return; }
       if (e.target && e.target.type === 'range') return;
-      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (V.opts.onEscape) V.opts.onEscape(); else close(); }
       else if (e.key === 'ArrowRight') { e.preventDefault(); next(); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); }
       else if (e.key === ' ' && !(e.target.closest && e.target.closest('button'))) { e.preventDefault(); togglePause(); }
@@ -262,6 +262,7 @@
       V.opts.readonly ? null : h('button', { type: 'button', class: 'st-ib st-aa', 'aria-label': 'הוספת טקסט', onclick: () => openEditor(null) }, 'Aa'),
       h('button', { type: 'button', class: 'st-ib st-pp', 'aria-label': paused ? 'המשך' : 'עצירה', html: icon(paused ? 'play' : 'pause'), onclick: () => togglePause() }),
       h('button', { type: 'button', class: 'st-ib st-mute', 'aria-label': muted ? 'הפעלת שמע' : 'השתקה', html: icon(muted ? 'mute' : 'vol'), onclick: () => setMuted(!V.vid.muted) }),
+      V.opts.readonly || !V.opts.onDelete ? null : h('button', { type: 'button', class: 'st-ib st-del', 'aria-label': 'מחיקת הסטורי', html: icon('trash'), onclick: () => askDelete() }),
       V.opts.readonly ? null : h('button', { type: 'button', class: 'st-ib st-x', 'aria-label': 'סגירה', html: icon('x'), onclick: () => close() })].filter(Boolean));
     V.root.querySelector('.st-nav.prev').disabled = V.i === 0;
   }
@@ -307,6 +308,14 @@
   }
   function pause() { if (V) V.vid.pause(); }
   function resume() { if (V && !V.held && !V.typing && !V.editing && !V.userPaused && !V.ended && V.end.hidden) play(); }
+  // pause while the confirm box is up; play on if she cancels (on delete the page reloads)
+  async function askDelete() {
+    const wasPaused = V.userPaused;
+    if (!wasPaused) togglePause();
+    const gone = await V.opts.onDelete(cur());
+    if (!gone && V && !wasPaused && V.userPaused) togglePause();
+  }
+
   function togglePause() {
     V.userPaused = !V.userPaused;
     if (V.userPaused) pause(); else play();

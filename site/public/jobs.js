@@ -58,7 +58,9 @@
     x: '<path d="M6 6l12 12M18 6 6 18"/>',
     check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
     send: '<path d="M20 4 3 11l7 2.5L12.5 21z"/><path d="m10 13.5 4-4"/>',
-    retry: '<path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4.5h4.5"/>'
+    retry: '<path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4.5h4.5"/>',
+    trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+    play: '<path d="M8 5.5v13l11-6.5z" fill="currentColor"/>'
   };
 
   /* ---------------- upload engine ---------------- */
@@ -502,10 +504,20 @@
       return '<span class="jl-th">' + (img ? '<img src="' + esc(f.url) + '" alt="" loading="lazy">' : vid ? '<video src="' + esc(f.url) + '#t=0.1" muted playsinline preload="metadata"></video>' : svg(I.photo, 18)) + '</span>';
     }).join('') + (media.length > 6 ? '<span class="jl-th more">+' + (media.length - 6) + '</span>' : '');
     var tx = voices.filter(function (v) { return !(v.transcript && (j.text || '').indexOf(v.transcript.trim()) >= 0); }).map(function (v) { return v.transcript ? '<p class="jl-voice">' + svg(I.mic, 14) + '<span>' + esc(v.transcript) + '</span></p>' : '<p class="jl-voice muted">' + svg(I.mic, 14) + '<span>הודעה קולית' + (v.transcript_state === 'pending' ? ', עוד לא תומללה' : '') + '</span></p>'; }).join('');
-    return '<li class="jl-card ' + esc(j.status) + '"><div class="jl-head"><span class="tag ' + st.cls + '">' + st.label + '</span><span class="small muted">' + fmtWhen(j.sent_at || j.created_at) + '</span></div>' +
+    var href = reviewHref(j);
+    var n = (j.posts || []).length;
+    return '<li class="jl-card ' + esc(j.status) + (href ? ' go' : '') + '"' + (href ? ' data-href="' + esc(href) + '"' : '') + '><div class="jl-head"><span class="tag ' + st.cls + '">' + st.label + '</span><span class="small muted">' + fmtWhen(j.sent_at || j.created_at) + '</span>' +
+      '<button type="button" class="jl-del" data-jl-del="' + j.id + '" aria-label="מחיקת המשימה" title="מחיקת המשימה">' + svg(I.trash, 17) + '</button></div>' +
       (j.text ? '<p class="jl-text">' + esc(j.text) + '</p>' : '') + tx +
       (media.length ? '<div class="jl-thumbs">' + thumbs + '</div>' : '') +
-      (j.status_note ? '<div class="claude-note jl-note"><strong>קלוד:</strong> <span>' + esc(j.status_note) + '</span></div>' : '') + '</li>';
+      (j.status_note ? '<div class="claude-note jl-note"><strong>קלוד:</strong> <span>' + esc(j.status_note) + '</span></div>' : '') +
+      (href ? '<a class="btn primary jl-go" href="' + esc(href) + '">' + svg(I.play, 16) + (n > 1 ? 'לצפייה ולאישור (' + n + ')' : 'לצפייה ולאישור') + '</a>' : '') + '</li>';
+  }
+  // a finished job opens what it produced: a story series from its first story, a video at that video
+  function reviewHref(j) {
+    var p = (j.posts || [])[0];
+    if (p) return p.kind === 'story' ? '/foryou?stories=' + p.client_id + '&post=' + p.id : '/foryou?post=' + p.id;
+    return j.status === 'done' && !j.had_posts ? '/foryou' : '';
   }
   var lists = [];
   function renderList(el, opts) {
@@ -524,7 +536,20 @@
     }).catch(function () { el.innerHTML = ''; });
   }
   function refreshLists() { lists.forEach(function (x) { if (document.body.contains(x.el)) renderList(x.el, x.opts); }); }
-  document.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-jb-open]')) open(); });
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest) return;
+    if (e.target.closest('[data-jb-open]')) return open();
+    var del = e.target.closest('[data-jl-del]');
+    if (del) {
+      e.preventDefault();
+      if (!confirm('למחוק את המשימה ואת הקבצים שהעלית אליה? הסרטונים שקלוד כבר הכין נשארים במסך האישורים')) return;
+      del.disabled = true;
+      api('DELETE', '/api/jobs/' + del.getAttribute('data-jl-del')).then(function () { toast('המשימה נמחקה'); refreshLists(); }, function () { del.disabled = false; toast('לא הצלחנו למחוק. אפשר לנסות שוב'); });
+      return;
+    }
+    var card = e.target.closest('.jl-card[data-href]');
+    if (card && !e.target.closest('a, button, video')) location.href = card.getAttribute('data-href');
+  });
   setInterval(function () { if (document.visibilityState === 'visible' && user && lists.length) refreshLists(); }, 30000);
 
   /* ---------------- public ---------------- */

@@ -14,7 +14,7 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 - `GET /api/clients` → `{clients: [Client]}` · `POST /api/clients` `{name, handle?, profile_url?, avatar?, bio?, color?}` · `PATCH /api/clients/<id>`
 - `GET /api/feed?stage=review&client=<id>` → `{groups: [{client: Client, posts: [Post]}]}`. Groups keep client order, posts newest first inside a group. Default stage = review.
 - `GET /api/posts?client=<id>` → `{posts: [Post]}` (all stages, for the board) · `GET /api/posts/<id>` → `{post: Post}`
-- `PATCH /api/posts/<id>` `{title?, caption?, music?, scheduled_at?, stage?}`
+- `PATCH /api/posts/<id>` `{title?, caption?, music?, scheduled_at?, stage?}` · `DELETE /api/posts/<id>` (owner) soft delete: `deleted_at` set, the post disappears from every list, feed, share and count; `agent.py restore-post <id>` brings it back
 - `POST /api/posts/<id>/cover/choose` `{option_id}` → `{post}`; that option becomes `cover_url`, `cover_state` approved, and (real videos with a Bunny key) the Bunny thumbnail
 - `POST /api/posts/<id>/comments` also takes `cover_option_id` with `target: "cover"` = "change the text on this option"; sets `cover_state` to changes
 - `POST /api/posts/<id>/state` `{part: "video"|"caption"|"cover", state: "approved"|"changes"|"pending"}` → `{post}`. All three approved ⇒ stage `approved` (a `kind: "story"` post is approved by its video alone). Any `changes` ⇒ stage back to `editing`.
@@ -26,10 +26,11 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 - `GET /api/settings` → `{agency_name, bunny_library_id, bunny_cdn_host, has_bunny_key, has_elevenlabs_key}` · `POST /api/settings` (owner) same fields + keys
 
 - `GET /media/r2-<id>.mp4` streams an R2-hosted video (HTTP Range, 206). Needs the session cookie or `?t=<share token>` of the client that owns the post; anything else is 403. Playback URLs of R2 videos point here (with `?t=` on the client screens)
+- `GET /media/r2-<id>.jpg` the first frame of that video (same access). `version.thumb` points here once the Mac uploaded it (`versions.poster = 1`); without it the screens show the video itself at 0.1s
 
 ## Jobs (owner only: "+" button, files from the phone + text / voice note for Claude)
 
-- `POST /api/jobs` → `{job, part_size}` creates a draft. `GET /api/jobs` the last 30 sent jobs with files. `GET /api/jobs/<id>`. `DELETE /api/jobs/<id>` (draft only)
+- `POST /api/jobs` → `{job, part_size}` creates a draft. `GET /api/jobs` the last 30 sent jobs with files. `GET /api/jobs/<id>`. `DELETE /api/jobs/<id>` (any status: the job and its uploaded files; posts it produced stay). A job has `posts: [{id, kind, client_id, title, video_state}]` (what it produced, deleted ones left out); the card links to the first one
 - `POST /api/jobs/<id>/files` `{name, size, content_type, role: media|voice}` → `{file_id, part_size, parts}` starts an R2 multipart upload (≤8 GB)
 - `PUT /api/jobs/<id>/files/<fid>/parts/<n>` body = octet-stream, exactly `part_size` (10 MiB) except the last → `{etag}`. `POST …/files/<fid>/complete` `{parts: [{part_number, etag}]}`
 - `POST …/files/<fid>/transcribe` (voice: ElevenLabs Scribe, Hebrew; 409 `no_key` without the site key). `DELETE …/files/<fid>` (draft only). `GET …/files/<fid>/media` (Range)
@@ -67,8 +68,10 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 - `GET /api/agent/secrets` → `{elevenlabs_key}` (for transcription on the Mac)
 - `GET /api/agent/jobs?status=queued,new,working|all` → `{jobs}` · `GET /api/agent/jobs/<id>` → `{job}` with file URLs · `GET /api/agent/jobs/<id>/files/<fid>` the file (ready only)
 - `POST /api/agent/jobs/<id>/files/<fid>/transcript` `{transcribe: true}` (on the site) or `{transcript}` (from the Mac)
-- `POST /api/agent/jobs/<id>/status` `{status: new|working|done, note?}`; events `job_working` / `job_done` ring her bell
-- CLI: `agent.py jobs | job <id> | download-job <id> <dir> | job-status <id> <status> --note "…" | set-elevenlabs-key`
+- `POST /api/agent/jobs/<id>/status` `{status: new|working|done, note?, posts?: [post ids]}`; events `job_working` / `job_done` ring her bell. `posts` = what the job produced: her queue card opens them for approval
+- `PUT /api/agent/r2/poster/<guid>` body = JPEG (≤3 MB) → first frame of an R2 video, sets `versions.poster`. `GET /api/agent/r2/missing-posters` → `{versions: [{id, post_id, bunny_guid}]}`
+- `POST /api/agent/posts/<id>/restore` undoes a delete
+- CLI: `agent.py jobs | job <id> | download-job <id> <dir> | job-status <id> <status> --note "…" --posts 6,7 | restore-post <id> | backfill-posters | set-elevenlabs-key`. `upload` of an R2 video also uploads its first frame
 
 ## Shapes
 

@@ -104,3 +104,8 @@ dialog.jb-sheet { width: min(520px, calc(100vw - 24px)); overflow: auto; overscr
 .jl-note { font-size: 14px; }
 .jb-vline { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 14px; color: var(--text-2); }
 .jb-vline > svg { flex: none; color: var(--accent); }
+.jl-head .small { margin-inline-end: auto; }
+.jl-del { flex: none; width: 34px; height: 34px; margin: -6px -6px -6px 0; border: 0; border-radius: 50%; background: none; color: var(--text-2); display: grid; place-items: center; cursor: pointer; }
+.jl-del:hover, .jl-del:focus-visible { background: var(--surface-2); color: var(--pending); }
+.jl-card.go { cursor: pointer; }
+.jl-go { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; margin-top: 2px; }
