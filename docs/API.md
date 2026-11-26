@@ -28,6 +28,8 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 
 - `GET /media/r2-<id>.mp4` streams an R2-hosted video (HTTP Range, 206). Needs the session cookie or `?t=<share token>` of the client that owns the post; anything else is 403. Playback URLs of R2 videos point here (with `?t=` on the client screens)
 - `GET /media/r2-<id>.jpg` the first frame of that video (same access). `version.thumb` points here once the Mac uploaded it (`versions.poster = 1`); without it the screens show the video itself at 0.1s
+- `GET /media/img-<id>.jpg|png` one slide of an image post (same access as the video route: session cookie or `?t=<share token>` of the owning client).
+- Image posts and carousels: a version with `media: "images"` instead of a film. `version = {…, media: "images", duration: null, mp4: [], hls: null, thumb: <slide 1 url>, embed: null, slides: [{n, url, width, height}]}`, slides in order (`n` from 1). A video version has no `media` and no `slides` key, exactly as before. One slide = an image post, several = a carousel. A corrected carousel is a new version with its own slides. Comments carry `slide` (1-based, null = none) next to `at_sec`: `POST /api/posts/<id>/comments` `{body, slide?}`
 
 ## Jobs (owner only: "+" button, files from the phone + text / voice note for Claude)
 
@@ -63,6 +65,8 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 - `GET /api/agent/bunny/video/<guid>` → Bunny status (`status` 4 = ready, `length`, `width`, `height`)
 - `POST /api/agent/posts/<id>/versions` `{bunny_guid, duration?, width?, height?, note?}` → `{version}`; post goes to `review`, video/cover states reset to pending, event `new_video`
 - `PATCH /api/agent/posts/<id>` `{caption?, title?, music?, cover_time?}` (`cover_time` seconds = Bunny takes the frame as the thumbnail)
+- `PUT /api/agent/r2/image?name=<file>` body = JPEG or PNG bytes (≤15 MB) → `{guid: "img-…", ext, size}`; R2 key `img/<guid>.<ext>`. Errors `not_jpg_or_png` (415), `size`, `r2_not_bound`
+- `POST /api/agent/posts/<id>/image-versions` `{slides: [{guid, ext, width?, height?, bytes?}] (1..20, in order), note?}` → `{version: {…, slides}}`; same effects as a video version (post to `review`, video state pending, event `new_video` / `new_version`, push like a reel). Errors `slides`, `slide_missing` (404), `slide_used` (409). `agent.py upload-images` does both calls
 - `POST /api/agent/posts/<id>/cover-options` `{image: "data:image/jpeg;base64,…" (≤1.5 MB), note?, notify?}` → `{option: {id, url, note}}`; cover_state back to pending, event `new_cover` unless `notify: false`
 - `GET /cover/<token>.jpg` (public, unguessable) serves an option's image
 - `POST /api/agent/posts/<id>/cover` body = image bytes (`content-type: image/jpeg|png`) → Bunny thumbnail, `cover_url` updated, cover_state pending
@@ -70,7 +74,7 @@ All JSON. Team routes need the session cookie (set by `/api/login` or `/api/setu
 - `GET /api/agent/secrets` → `{elevenlabs_key}` (for transcription on the Mac)
 - `GET /api/agent/jobs?status=queued,new,working|all` → `{jobs}` · `GET /api/agent/jobs/<id>` → `{job}` with file URLs · `GET /api/agent/jobs/<id>/files/<fid>` the file (ready only)
 - `POST /api/agent/jobs/<id>/files/<fid>/transcript` `{transcribe: true}` (on the site) or `{transcript}` (from the Mac)
-- `POST /api/agent/jobs/<id>/status` `{status: new|working|done, note?, posts?: [post ids]}`; events `job_working` / `job_done` ring her bell. `posts` = what the job produced: her queue card opens them for approval
+- `POST /api/agent/jobs/<id>/status` `{status: new|working|done, note?, posts?: [post ids]}`; events `job_working` / `job_done` ring her bell. `posts` = what the job produced: her queue card opens them for approval, and stories among them are announced to her phone in one notification when the job turns `done` (a story uploaded while a job is `working` sends none by itself). Notes (`note` here, on versions, on comment done) are for what she has to know or check, never a list of routine work
 - `PUT /api/agent/r2/poster/<guid>` body = JPEG (≤3 MB) → first frame of an R2 video, sets `versions.poster`. `GET /api/agent/r2/missing-posters` → `{versions: [{id, post_id, bunny_guid}]}`
 - `POST /api/agent/posts/<id>/restore` undoes a delete
 - `POST /api/agent/settings` `{bunny_library_id?, bunny_library_key?, bunny_cdn_host?, elevenlabs_key?, agency_name?}`, or `{bunny_account_key}` = make this site its own Bunny Stream library (409 `bunny_already_set` unless `replace: true`). CLI: `agent.py set-bunny-key` (reads BUNNY_API_KEY on the Mac)

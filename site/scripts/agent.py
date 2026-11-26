@@ -9,8 +9,16 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
   agent.py client '{"name":..,"handle":..,"profile_url":..,"avatar":..,"bio":..}'
   agent.py clients
   agent.py post <client_id> "<title>" [--kind reel|story|short|long|post] [--caption "..."]
-  agent.py upload <post_id> <video file> [--note "what changed"]     new version → appears in For You
+  agent.py upload <post_id> <video file> [--note "..."]     new version → appears in For You
+                                          --note floats over the video in the app as a bubble from you. No note is the default.
+                                          Never list routine work (captions, noise cleaned, silences cut): she does not want to read it.
+                                          Only when she has to know: something to check (a name you are not sure of), something you did
+                                          that she did not ask for (blurred a password on screen), something you could not do, a question.
+                                          One short sentence
                                           (Bunny library if the site has one, otherwise the site's own R2 bucket)
+  agent.py upload-images <post_id> <img> [<img> ...] [--note "..."]   new version made of still images (jpg/png, up to 20, in the order given):
+                                          one image = an image post, several = a carousel (make the post with --kind post first). Shows up in For You
+                                          like a reel (swipe between slides, comments point at a slide). Same --note rule as upload. Images only: no video slides
   agent.py approved [--all] [--kind story]   posts whose video is approved (not yet scheduled; --all = also scheduled/published)
   agent.py texts <post_id>                text captions Jennie placed on a story (JSON list), to bake into the video before posting.
                                           Also in `approved` output as the `texts` field of each post. Per text:
@@ -22,12 +30,18 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
   agent.py trim <post_id>                 Instagram-style trim Jennie set on a story's current version: {trim_in, trim_out, duration} in seconds,
                                           null = not trimmed on that side. Also `trim_in`/`trim_out` in `approved`. bake_texts.py applies it
                                           (cuts video+audio, re-encodes), so always bake a story before posting, even with no stickers
+  agent.py batch <client_id> "<title>" [--at ISO] [--kind story] <post_id> <post_id> ...   group a client's posts (e.g. one story series) into
+                                          ONE card in the iPhone app, in the order given; the app sends one push per batch ("N stories waiting")
+  agent.py batches                        every batch with its posts (id, position, stage, video_state)
+  agent.py batch-edit <batch_id> [--title "..."] [--at ISO] [--posts 6,7,8]   rename, reschedule, or re-set the posts/order of a batch
   agent.py share-stories <post_id> <post_id> ...   public view-only link (/s/<token>) to those stories in that order, current versions, with her text stickers;
                                           no login, no approve/comment. Prints the URL
   agent.py revoke-share <token>           kills a share link
   agent.py download <post_id> [out.mp4]   the current version's file of a post
   agent.py mark-scheduled <post_id> [--at 2026-11-25T18:00:00+02:00]   stage → scheduled
   agent.py restore-post <post_id>        bring back a post Jennie deleted on the site
+  agent.py backfill-lite [folder]         light copies (720 px, ~1.5 Mbps) for R2 videos that have none; the phone plays the light copy.
+                                          New uploads get one automatically (needs ffmpeg). With a folder: originals named <post_id>.mp4 there are used
   agent.py backfill-posters               first-frame covers for R2 videos that have none (new uploads get one automatically)
   agent.py storage                        where videos go: {"bunny": bool, "r2": bool}
   agent.py caption <post_id> "<text>"
@@ -41,8 +55,10 @@ Reads the site address and AGENT_TOKEN from .secrets/site.json at the agency fol
   agent.py job <id>                       one job as JSON: text, files (role media|voice, name, size, state), voice transcripts.
                                           Voice notes without a transcript are transcribed now (site, else Scribe on this Mac)
   agent.py download-job <id> <dir>        every file of the job into <dir>, plus <dir>/job.json (text + transcripts)
-  agent.py job-status <id> working|done|new [--note "what I'm doing / what came out"] [--posts 6,7,8]   she sees status + note on the site;
-                                          working and done also ring her bell
+  agent.py job-status <id> working|done|new [--note "..."] [--posts 6,7,8]   she sees status + note in her queue.
+                                          Always pass --posts on done: her phone opens them, and the stories of one job reach her
+                                          as one notification when the job is done. --note only when she has to know or answer
+                                          something (same rule as upload --note); never a list of what was done
   agent.py set-bunny-key                 BUNNY_API_KEY (the Bunny account key) from this Mac: makes the site its own Bunny Stream
                                           library and saves its key, so uploads (long videos too) go to Bunny. Never printed
   agent.py set-elevenlabs-key             copy ELEVENLABS_API_KEY from this Mac (env / jennie-edit-kit / video-use .env) into
@@ -119,7 +135,131 @@ def upload_r2(post_id, path, note=None):
         sys.exit(f"upload failed: {r}")
     out = call("POST", f"/posts/{post_id}/versions", {"bunny_guid": r["guid"], "duration": dur, "width": w, "height": h, "note": note})
     put_poster(r["guid"], path)
+    put_lite(r["guid"], path, dur)
     print(json.dumps(out, ensure_ascii=False))
+
+
+def make_lite(src, dst):
+    """A light copy for the phone: short side 720 px, about 1.5 Mbps, a keyframe every second, starts playing at once."""
+    scale = "scale='if(gt(iw,ih),-2,min(720,iw))':'if(gt(iw,ih),min(720,ih),-2)'"
+    cmd = ["ffmpeg", "-v", "error", "-y", "-i", src, "-vf", scale, "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high",
+           "-b:v", "1400k", "-maxrate", "1800k", "-bufsize", "2800k", "-g", "30", "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-b:a", "96k", "-ac", "2", "-movflags", "+faststart", dst]
+    try:
+        return subprocess.run(cmd).returncode == 0 and os.path.getsize(dst) > 0
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def put_lite(guid, video_path, duration=None):
+    """Makes the light copy of an R2 video and stores it next to the original. The phone plays the light one,
+    so a video opens at once on a slow connection; saving and publishing still use the original.
+    Skipped (quietly) without ffmpeg, and for films over 10 minutes."""
+    if duration and duration > 600:
+        return False
+    with tempfile.TemporaryDirectory() as d:
+        lite = os.path.join(d, "lite.mp4")
+        if not make_lite(video_path, lite):
+            print("light copy: not made (ffmpeg missing or failed); the phone will use the original", file=sys.stderr)
+            return False
+        c = conf()
+        try:
+            r = put_file(c["url"].rstrip("/") + f"/api/agent/r2/lite/{guid}", lite,
+                         {"authorization": "Bearer " + c["agent_token"], "content-type": "application/octet-stream"})
+        except (Exception, SystemExit) as e:  # a site that has no light copies yet: the upload itself already went through
+            print(f"light copy: the site did not take it ({str(e)[:120]}); the phone will use the original", file=sys.stderr)
+            return False
+        if r.get("ok"):
+            print(f"light copy: {os.path.getsize(lite) // 1024} KB for {guid}", file=sys.stderr)
+            return True
+        print(f"light copy: upload failed {r}", file=sys.stderr)
+        return False
+
+
+def backfill_lite(local_dir=None):
+    """Light copies for R2 videos that have none. With a folder, an original named <post_id>.mp4 or <guid>.mp4
+    there is used instead of downloading it again (only for the post's current version)."""
+    c = conf()
+    todo = call("GET", "/r2/missing-lite").get("versions", [])
+    done = 0
+    with tempfile.TemporaryDirectory() as d:
+        for v in todo:
+            g = v["bunny_guid"]
+            src = None
+            if local_dir:
+                for name in (f"{g}.mp4", f"{v['post_id']}.mp4" if v.get("current") else None):
+                    if name and os.path.exists(os.path.join(local_dir, name)):
+                        src = os.path.join(local_dir, name)
+                        break
+            try:
+                if not src:
+                    src = os.path.join(d, "orig.mp4")
+                    fetch_to(c["url"].rstrip("/") + f"/api/agent/media/{g}.mp4", src)
+                if put_lite(g, src, v.get("duration")):
+                    done += 1
+            except (Exception, SystemExit) as e:  # one bad file does not stop the rest
+                print(f"light copy: {g} skipped ({e})", file=sys.stderr)
+    return {"missing": len(todo), "made": done}
+
+
+def image_size(path):
+    """(width, height) of a JPEG or PNG, standard library only. Raises ValueError for anything else."""
+    with open(path, "rb") as f:
+        head = f.read(26)
+        if head[:8] == b"\x89PNG\r\n\x1a\n":
+            return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+        if head[:2] == b"\xff\xd8":
+            f.seek(2)
+            while True:
+                b = f.read(1)
+                while b and b != b"\xff":
+                    b = f.read(1)
+                while b == b"\xff":
+                    b = f.read(1)
+                if not b:
+                    break
+                marker = b[0]
+                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                    continue
+                seg = f.read(2)
+                if len(seg) < 2:
+                    break
+                length = int.from_bytes(seg, "big")
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                    data = f.read(5)
+                    return int.from_bytes(data[3:5], "big"), int.from_bytes(data[1:3], "big")
+                f.seek(length - 2, 1)
+    raise ValueError(f"not a readable jpg/png: {path}")
+
+
+def upload_images(post_id, paths, note=None):
+    """Image post / carousel: every picture goes into the site's R2 bucket, then they become ONE new version in the given order."""
+    post_id = int(post_id)
+    if not paths:
+        sys.exit("upload-images <post_id> <img> [<img> ...]")
+    if len(paths) > 20:
+        sys.exit("at most 20 images in one post")
+    for pth in paths:
+        if not os.path.isfile(pth):
+            sys.exit(f"no such file: {pth}")
+        if not pth.lower().endswith((".jpg", ".jpeg", ".png")):
+            sys.exit(f"only jpg or png (images only, no video slides): {pth}")
+    if not call("GET", "/storage").get("r2"):
+        sys.exit("the site has no R2 bucket: images are stored there")
+    c = conf()
+    slides = []
+    for i, pth in enumerate(paths, 1):
+        try:
+            w, h = image_size(pth)
+        except ValueError as e:
+            sys.exit(str(e))
+        print(f"uploading image {i}/{len(paths)} ({os.path.getsize(pth) // 1024} KB)…", file=sys.stderr)
+        r = put_file(c["url"].rstrip("/") + "/api/agent/r2/image?name=" + urllib.parse.quote(os.path.basename(pth)), pth,
+                     {"authorization": "Bearer " + c["agent_token"], "content-type": "application/octet-stream"})
+        if not r.get("guid"):
+            sys.exit(f"upload failed: {r}")
+        slides.append({"guid": r["guid"], "ext": r["ext"], "width": w, "height": h, "bytes": r.get("size")})
+    print(json.dumps(call("POST", f"/posts/{post_id}/image-versions", {"slides": slides, "note": note}), ensure_ascii=False))
 
 
 def put_poster(guid, video_path):
@@ -314,14 +454,38 @@ def main(a):
         caption = opt(a, "--caption")
         out = call("POST", "/posts", {"client_id": a[0], "title": a[1], "kind": kind, "caption": caption,
                                       "orientation": "horizontal" if kind == "long" else "vertical"})
+    elif cmd == "batch":
+        at = opt(a, "--at")
+        kind = opt(a, "--kind", "story")
+        body = {"client_id": a[0], "title": a[1], "kind": kind, "post_ids": [int(x) for x in a[2:]]}
+        if at:
+            body["scheduled_at"] = at
+        out = call("POST", "/batches", body)["batch"]
+    elif cmd == "batches":
+        out = call("GET", "/batches").get("batches", [])
+    elif cmd == "batch-edit":
+        body = {}
+        for flag, key in (("--title", "title"), ("--at", "scheduled_at")):
+            v = opt(a, flag)
+            if v is not None:
+                body[key] = v
+        posts = opt(a, "--posts")
+        if posts:
+            body["post_ids"] = [int(x) for x in posts.split(",") if x.strip()]
+        out = call("PATCH", f"/batches/{int(a[0])}", body)["batch"]
     elif cmd == "restore-post":
         out = call("POST", f"/posts/{int(a[0])}/restore")["post"]
         out = {k: out.get(k) for k in ("id", "title", "kind", "stage")}
     elif cmd == "backfill-posters":
         out = backfill_posters()
+    elif cmd == "backfill-lite":
+        out = backfill_lite(a[0] if a else None)
     elif cmd == "upload":
         note = opt(a, "--note")
         return upload(a[0], a[1], note)
+    elif cmd == "upload-images":
+        note = opt(a, "--note")
+        return upload_images(a[0], a[1:], note)
     elif cmd == "caption":
         out = call("PATCH", f"/posts/{int(a[0])}", {"caption": a[1]})
     elif cmd == "cover":
